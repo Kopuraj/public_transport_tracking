@@ -1,0 +1,115 @@
+// Fix for server.js: Add this snippet to replace the auth endpoints
+
+// ============================================
+// CORRECTED AUTHENTICATION ENDPOINTS
+// ============================================
+
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const { email, password, fullName, role } = req.body;
+
+    if (!email || !password || !fullName) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
+    }
+
+    // Check if email already exists
+    const existingUsers = await db.collection('users').where('email', '==', email).limit(1).get();
+    if (!existingUsers.empty) {
+      return res.status(400).json({ success: false, error: 'Email already registered' });
+    }
+
+    // Create Firebase user
+    const userRecord = await admin.auth().createUser({
+      email: email,
+      password: password,
+      displayName: fullName
+    });
+
+    // Store user data in Firestore
+    await db.collection('users').doc(userRecord.uid).set({
+      uid: userRecord.uid,
+      email: email,
+      fullName: fullName,
+      role: role || 'passenger',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      impactPoints: 0,
+      status: 'active'
+    });
+
+    // Generate JWT token
+    const token = jwt.sign({ uid: userRecord.uid }, process.env.JWT_SECRET || 'demo-secret', { expiresIn: '24h' });
+
+    console.log(`✅ Signup successful: ${email}`);
+
+    res.json({
+      success: true,
+      user: { uid: userRecord.uid, email, fullName },
+      token
+    });
+  } catch (error) {
+    console.error('Signup error:', error);
+    
+    if (error.code === 'auth/email-already-exists') {
+      return res.status(400).json({ success: false, error: 'Email already registered' });
+    }
+    if (error.code === 'auth/invalid-email') {
+      return res.status(400).json({ success: false, error: 'Invalid email format' });
+    }
+    
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: 'Email and password required' });
+    }
+
+    try {
+      // Get user from Firebase by email
+      const userRecord = await admin.auth().getUserByEmail(email);
+
+      // Fetch user data from Firestore
+      const userDoc = await db.collection('users').doc(userRecord.uid).get();
+      
+      if (!userDoc.exists) {
+        return res.status(401).json({ success: false, error: 'User not found' });
+      }
+
+      const userData = userDoc.data();
+
+      // Generate JWT token
+      const token = jwt.sign({ uid: userRecord.uid }, process.env.JWT_SECRET || 'demo-secret', { expiresIn: '24h' });
+
+      console.log(`✅ Login successful: ${email}`);
+
+      res.json({
+        success: true,
+        user: {
+          uid: userData.uid,
+          email: userData.email,
+          fullName: userData.fullName,
+          role: userData.role
+        },
+        token
+      });
+
+    } catch (firebaseError) {
+      if (firebaseError.code === 'auth/user-not-found') {
+        return res.status(401).json({ success: false, error: 'User not found' });
+      }
+      throw firebaseError;
+    }
+
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
