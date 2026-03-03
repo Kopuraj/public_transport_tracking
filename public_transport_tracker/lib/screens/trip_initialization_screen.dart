@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../services/api_service.dart';
+import 'driver_trip_dashboard_screen.dart';
 
 class TripInitializationScreen extends StatefulWidget {
   const TripInitializationScreen({super.key});
@@ -8,8 +10,68 @@ class TripInitializationScreen extends StatefulWidget {
 }
 
 class _TripInitializationScreenState extends State<TripInitializationScreen> {
-  final String _selectedVehicle = 'NB-4562 (Leyland Viking)';
-  final String _selectedRoute = '502: Galle - Hapugala';
+  String _selectedVehicle = 'NB-4562';
+  String _selectedRouteId = 'route_502';
+  String _selectedRouteName = '502: Galle - Hapugala';
+  bool _isInitializing = false;
+  List<dynamic> _routes = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRoutes();
+  }
+
+  Future<void> _loadRoutes() async {
+    try {
+      final response = await ApiService().getAllRoutes();
+      if (response['success'] && response['routes'] != null) {
+        setState(() {
+          _routes = response['routes'];
+          if (_routes.isNotEmpty) {
+            _selectedRouteId = _routes[0]['id'];
+            _selectedRouteName = '${_routes[0]['routeNumber']}: ${_routes[0]['name']}';
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading routes: $e');
+    }
+  }
+
+  Future<void> _handleStartTrip() async {
+    setState(() => _isInitializing = true);
+    try {
+      final response = await ApiService().initializeTrip(
+        vehicleId: _selectedVehicle,
+        routeId: _selectedRouteId,
+      );
+
+      if (response['success']) {
+        final tripId = response['tripId'];
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DriverTripDashboardScreen(tripId: tripId),
+            ),
+          );
+        }
+      } else {
+        throw Exception(response['error'] ?? 'Failed to start trip');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isInitializing = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -19,7 +81,30 @@ class _TripInitializationScreenState extends State<TripInitializationScreen> {
         backgroundColor: Colors.white,
         elevation: 1,
         leading: GestureDetector(
-          onTap: () => Navigator.pop(context),
+          onTap: () {
+            showDialog(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('Logout'),
+                content: const Text('Do you want to logout?'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await ApiService().logout();
+                      if (context.mounted) {
+                        Navigator.of(context).pushReplacementNamed('/welcome');
+                      }
+                    },
+                    child: const Text('Logout', style: TextStyle(color: Colors.red)),
+                  ),
+                ],
+              ),
+            );
+          },
           child: Icon(Icons.arrow_back, color: Color(0xFF0D131B)),
         ),
         title: Text(
@@ -155,7 +240,7 @@ class _TripInitializationScreenState extends State<TripInitializationScreen> {
                             Icon(Icons.route, color: Color(0xFF136AEC)),
                             SizedBox(width: 12),
                             Text(
-                              _selectedRoute,
+                              _selectedRouteName,
                               style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.bold,
@@ -192,22 +277,26 @@ class _TripInitializationScreenState extends State<TripInitializationScreen> {
                   Container(
                     height: 200,
                     decoration: BoxDecoration(
+                      color: Color(0xFFF0F5FF),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Color(0xFFE0E6F2)),
                     ),
                     child: Stack(
                       children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              image: DecorationImage(
-                                image: NetworkImage(
-                                  'https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/-74.0,40.7,12,0,0/400x300@2x?access_token=pk.eyJ1IjoibWFwYm94IiwiYSI6ImNpejY4NXVycTA2emYycW1vNHprM3JzbDgifQ.rJcFIG214AriISLbB6B5aw',
+                        Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.map_outlined, size: 48, color: Color(0xFF136AEC).withValues(alpha: 0.5)),
+                              SizedBox(height: 8),
+                              Text(
+                                'Route Preview Map',
+                                style: TextStyle(
+                                  color: Color(0xFF4C6B9A),
+                                  fontWeight: FontWeight.w500,
                                 ),
-                                fit: BoxFit.cover,
                               ),
-                            ),
+                            ],
                           ),
                         ),
                         Positioned(
@@ -226,11 +315,11 @@ class _TripInitializationScreenState extends State<TripInitializationScreen> {
                               ],
                             ),
                             child: Text(
-                              'SATELLITE VIEW ACTIVE',
+                              'LIVE TRAFFIC READY',
                               style: TextStyle(
                                 fontSize: 10,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.red,
+                                color: Colors.green,
                               ),
                             ),
                           ),
@@ -294,32 +383,28 @@ class _TripInitializationScreenState extends State<TripInitializationScreen> {
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Starting trip...')),
-                    );
-                    // Navigate to Driver Trip Dashboard
-                    Navigator.pushReplacementNamed(context, '/driver-trip-dashboard');
-                  },
+                  onPressed: _isInitializing ? null : _handleStartTrip,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Color(0xFF136AEC),
                     padding: EdgeInsets.symmetric(vertical: 14),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.play_arrow, color: Colors.white),
-                      SizedBox(width: 8),
-                      Text(
-                        'Start Trip',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
+                  child: _isInitializing 
+                    ? SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.play_arrow, color: Colors.white),
+                        SizedBox(width: 8),
+                        Text(
+                          'Start Trip',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
+                      ],
+                    ),
                 ),
               ),
             ),

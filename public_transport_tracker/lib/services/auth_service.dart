@@ -34,6 +34,7 @@ class AuthService {
     required String fullName,
     required String email,
     required String password,
+    String role = 'passenger',
   }) async {
     if (_useMock) {
       return await _mockAuth.signUp(
@@ -48,6 +49,7 @@ class AuthService {
         email: email,
         password: password,
         fullName: fullName,
+        role: role,
       );
       if (data['success'] != true) {
         throw Exception(data['error'] ?? 'Signup failed');
@@ -138,6 +140,11 @@ class AuthService {
     } catch (e) {
       throw Exception('Logout failed: $e');
     }
+  }
+
+  // Get current user role from API Service
+  Future<String?> getUserRole() async {
+    return await _apiService.getStoredRole();
   }
 
   // Get user data from Firestore

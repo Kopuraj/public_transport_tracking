@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+import 'package:geolocator/geolocator.dart';
+import '../services/api_service.dart';
+import '../services/map_service.dart';
+import '../services/socket_service.dart';
 
 class DriverTripDashboardScreen extends StatefulWidget {
-  const DriverTripDashboardScreen({super.key});
+  final String? tripId;
+  const DriverTripDashboardScreen({super.key, this.tripId});
 
   @override
   State<DriverTripDashboardScreen> createState() => _DriverTripDashboardScreenState();
@@ -10,6 +16,91 @@ class DriverTripDashboardScreen extends StatefulWidget {
 class _DriverTripDashboardScreenState extends State<DriverTripDashboardScreen> {
   int _passengerCount = 24;
   final int _maxCapacity = 55;
+  
+  // Real-time tracking variables
+  StreamSubscription<Position>? _positionSubscription;
+  bool _isTracking = false;
+  String? _currentTripId;
+  String _statusText = 'Initializing...';
+  double _currentCompletion = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.tripId != null) {
+      setState(() {
+        _currentTripId = widget.tripId;
+        _isTracking = true;
+        _statusText = 'ONLINE';
+      });
+      _startTracking();
+    } else {
+      _startSimulatedTrip();
+    }
+  }
+
+  @override
+  void dispose() {
+    _stopTracking();
+    super.dispose();
+  }
+
+  void _startSimulatedTrip() {
+    // This would normally come from ApiService().initializeTrip
+    setState(() {
+      _currentTripId = "TRIP_${DateTime.now().millisecondsSinceEpoch}";
+      _isTracking = true;
+      _statusText = 'ONLINE';
+    });
+    _startTracking();
+  }
+
+  void _startTracking() async {
+    bool hasPermission = await MapService().checkLocationPermission();
+    if (!hasPermission) {
+      setState(() => _statusText = 'PERMISSION DENIED');
+      return;
+    }
+
+    SocketService().connect();
+
+    _positionSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10, // Update every 10 meters
+      ),
+    ).listen((Position position) {
+      if (_currentTripId != null) {
+        debugPrint('📡 Sending GPS: ${position.latitude}, ${position.longitude}');
+        ApiService().sendGpsUpdate(
+          tripId: _currentTripId!,
+          latitude: position.latitude,
+          longitude: position.longitude,
+          speed: position.speed,
+          accuracy: position.accuracy,
+        );
+      }
+    });
+
+    // Simulate completion progress
+    Timer.periodic(const Duration(minutes: 5), (timer) {
+      if (!mounted || !_isTracking) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        if (_currentCompletion < 0.95) {
+          _currentCompletion += 0.05;
+        }
+      });
+    });
+  }
+
+  void _stopTracking() {
+    _positionSubscription?.cancel();
+    _isTracking = false;
+    SocketService().disconnect();
+  }
 
   void _increasePassengers() {
     setState(() {
@@ -17,6 +108,7 @@ class _DriverTripDashboardScreenState extends State<DriverTripDashboardScreen> {
         _passengerCount++;
       }
     });
+    _updateCrowdLevel();
   }
 
   void _decreasePassengers() {
@@ -25,6 +117,22 @@ class _DriverTripDashboardScreenState extends State<DriverTripDashboardScreen> {
         _passengerCount--;
       }
     });
+    _updateCrowdLevel();
+  }
+
+  void _updateCrowdLevel() {
+    if (_currentTripId == null) return;
+    
+    double occupancy = _passengerCount / _maxCapacity;
+    String level = occupancy < 0.5 ? 'available' : occupancy < 0.8 ? 'standing' : 'full';
+    
+    // Send report to backend
+    ApiService().submitCrowdReport(
+      tripId: _currentTripId!,
+      crowdLevel: level,
+      userLatitude: 0, // In real CONDUCTOR use, would be current loc
+      userLongitude: 0,
+    );
   }
 
   @override

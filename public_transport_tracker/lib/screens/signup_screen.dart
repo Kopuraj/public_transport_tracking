@@ -17,6 +17,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   bool _obscurePassword = true;
   bool _agreedToTerms = false;
   bool _isLoading = false;
+  String _selectedRole = 'passenger'; // 'passenger' or 'driver'
 
   @override
   void dispose() {
@@ -58,6 +59,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         fullName: _fullNameController.text.trim(),
         email: _emailController.text.trim(),
         password: _passwordController.text,
+        role: _selectedRole,
       );
 
       // Show success message
@@ -262,6 +264,77 @@ class _SignUpScreenState extends State<SignUpScreen> {
                     ),
                   ),
                 ),
+              ),
+              Row(
+                children: [
+                   Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _selectedRole = 'passenger'),
+                      child: Container(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          color: _selectedRole == 'passenger' ? Color(0xFF0066FF).withValues(alpha: 0.1) : Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _selectedRole == 'passenger' ? Color(0xFF0066FF) : Color(0xFFCDD8EA),
+                            width: _selectedRole == 'passenger' ? 2 : 1,
+                          ),
+                        ),
+                        child: Column(
+                          children: [
+                            Icon(
+                              Icons.person,
+                              color: _selectedRole == 'passenger' ? Color(0xFF0066FF) : Color(0xFFA0A8B8),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Passenger',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: _selectedRole == 'passenger' ? Color(0xFF0066FF) : Color(0xFFA0A8B8),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 16),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _selectedRole = 'driver'),
+                      child: Container(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          color: _selectedRole == 'driver' ? Color(0xFF0066FF).withValues(alpha: 0.1) : Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _selectedRole == 'driver' ? Color(0xFF0066FF) : Color(0xFFCDD8EA),
+                            width: _selectedRole == 'driver' ? 2 : 1,
+                          ),
+                        ),
+                        child: Column(
+                          children: [
+                            Icon(
+                              Icons.directions_bus,
+                              color: _selectedRole == 'driver' ? Color(0xFF0066FF) : Color(0xFFA0A8B8),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Driver/Staff',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: _selectedRole == 'driver' ? Color(0xFF0066FF) : Color(0xFFA0A8B8),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
               SizedBox(height: 16),
 

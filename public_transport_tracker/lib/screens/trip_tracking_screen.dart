@@ -1,4 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'dart:async';
+import '../services/socket_service.dart';
+import '../services/map_service.dart';
+import '../services/api_service.dart';
 
 class TripTrackingScreen extends StatefulWidget {
   const TripTrackingScreen({super.key});
@@ -9,18 +15,72 @@ class TripTrackingScreen extends StatefulWidget {
 
 class _TripTrackingScreenState extends State<TripTrackingScreen> {
   int _selectedLoad = 2; // 0: Light, 1: Medium, 2: Heavy
+  
+  LatLng _busLocation = const LatLng(13.0827, 80.2707); // Default
+  String _etaText = '3 min';
+  String _occupancyText = 'HEAVY';
+  final MapController _mapController = MapController();
+  bool _isMapReady = false; // Add this
+  
+  StreamSubscription? _gpsSubscription;
+  StreamSubscription? _crowdSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _connectToRealTimeUpdates();
+  }
+
+  @override
+  void dispose() {
+    _gpsSubscription?.cancel();
+    _crowdSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _connectToRealTimeUpdates() {
+    SocketService().connect();
+    
+    _gpsSubscription = SocketService().gpsUpdates.listen((data) {
+      if (!mounted) return;
+      if (data['location'] != null) {
+        setState(() {
+          _busLocation = LatLng(
+            data['location']['latitude'],
+            data['location']['longitude']
+          );
+          if (data['eta'] != null) {
+            _etaText = '${data['eta']['etaMinutes']} min';
+          }
+        });
+        // Move map only when ready
+        if (_isMapReady) {
+          _mapController.move(_busLocation, _mapController.camera.zoom);
+        }
+      }
+    });
+
+    _crowdSubscription = SocketService().crowdUpdates.listen((data) {
+      if (!mounted) return;
+      setState(() {
+        final level = data['crowdLevel']?.toString().toUpperCase() ?? 'MEDIUM';
+        _occupancyText = level;
+        _selectedLoad = level == 'AVAILABLE' ? 0 : level == 'STANDING' ? 1 : 2;
+      });
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Color(0xFFF6F7F8),
+      backgroundColor: const Color(0xFFF6F7F8),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 1,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
+            const Text(
               'Galle - Hapugala',
               style: TextStyle(
                 color: Color(0xFF0D131B),
@@ -28,7 +88,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                 fontWeight: FontWeight.bold,
               ),
             ),
-            Text(
+            const Text(
               'To Ruhuna Engineering',
               style: TextStyle(
                 color: Color(0xFF999CA6),
@@ -39,14 +99,14 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
         ),
         actions: [
           Padding(
-            padding: EdgeInsets.only(right: 16),
+            padding: const EdgeInsets.only(right: 16),
             child: Container(
-              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
                 color: Colors.green,
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: Row(
+              child: const Row(
                 children: [
                   Icon(Icons.check_circle, color: Colors.white, size: 16),
                   SizedBox(width: 6),
@@ -70,54 +130,22 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
             // Map Section
             Container(
               height: 250,
-              color: Colors.white,
-              margin: EdgeInsets.all(16),
+              margin: const EdgeInsets.all(16),
+              clipBehavior: Clip.antiAlias,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Color(0xFFE0E6F2)),
+                border: Border.all(color: const Color(0xFFE0E6F2)),
               ),
-              child: Stack(
-                children: [
-                  Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      image: DecorationImage(
-                        image: NetworkImage(
-                          'https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/-74.0,40.7,12,0,0/400x300@2x?access_token=pk.eyJ1IjoibWFwYm94IiwiYSI6ImNpejY4NXVycTA2emYycW1vNHprM3JzbDgifQ.rJcFIG214AriISLbB6B5aw',
-                        ),
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                  ),
-                  Center(
-                    child: Icon(
-                      Icons.location_on,
-                      color: Color(0xFF136AEC),
-                      size: 40,
-                    ),
-                  ),
-                  Positioned(
-                    bottom: 12,
-                    right: 12,
-                    child: Container(
-                      padding: EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.1),
-                            blurRadius: 8,
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        Icons.my_location,
-                        color: Color(0xFF136AEC),
-                        size: 20,
-                      ),
-                    ),
-                  ),
+              child: MapService().createMap(
+                center: _busLocation,
+                zoom: 15,
+                mapController: _mapController,
+                onMapReady: () {
+                  setState(() => _isMapReady = true);
+                  debugPrint('🗺️ Trip Tracking Map Ready');
+                },
+                markers: [
+                  MapService().createBusMarker(_busLocation, busNumber: "NB-4562"),
                 ],
               ),
             ),
@@ -157,7 +185,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                             Icon(Icons.schedule, color: Colors.white, size: 14),
                             SizedBox(width: 4),
                             Text(
-                              '3 min',
+                              _etaText,
                               style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 12,

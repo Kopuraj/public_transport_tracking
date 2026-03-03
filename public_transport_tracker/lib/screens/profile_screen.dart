@@ -10,6 +10,31 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   final _authService = AuthService();
+  Map<String, dynamic>? _userData;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserProfile();
+  }
+
+  Future<void> _loadUserProfile() async {
+    try {
+      final role = await _authService.getUserRole();
+      // Since we don't have a specific persistent user object easily accessible here,
+      // we'll just show the role for now and maybe email from prefs
+      setState(() {
+        _userData = {
+          'fullName': 'User Account',
+          'role': role ?? 'passenger',
+        };
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+    }
+  }
 
   Future<void> _handleLogout() async {
     showDialog(
@@ -95,7 +120,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                   // User Info
                   Text(
-                    'John Doe',
+                    _userData?['fullName'] ?? 'User Name',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
@@ -104,10 +129,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   SizedBox(height: 4),
                   Text(
-                    'john.doe@example.com',
+                    (_userData?['role']?.toString().toUpperCase() ?? 'PASSENGER'),
                     style: TextStyle(
                       fontSize: 13,
-                      color: Color(0xFF999CA6),
+                      color: Color(0xFF136AEC),
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                   SizedBox(height: 16),
@@ -153,6 +179,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
               margin: EdgeInsets.symmetric(vertical: 8),
               child: Column(
                 children: [
+                  if (_userData?['role'] == 'driver')
+                    _buildMenuItem(
+                      icon: Icons.dashboard,
+                      title: 'Driver Dashboard',
+                      subtitle: 'Switch to duty initialization',
+                      onTap: () {
+                        Navigator.pushNamed(context, '/trip-initialization');
+                      },
+                    ),
+                  if (_userData?['role'] == 'driver')
+                    Divider(height: 1),
                   _buildMenuItem(
                     icon: Icons.edit,
                     title: 'Edit Profile',

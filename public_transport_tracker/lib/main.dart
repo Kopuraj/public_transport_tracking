@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
 import 'screens/location_permission_screen.dart';
@@ -16,8 +17,15 @@ import 'screens/admin_fleet_overview_screen.dart';
 import 'screens/admin_crowd_analytics_screen.dart';
 import 'screens/admin_emergency_broadcast_screen.dart';
 import 'screens/schedule_feedback_screen.dart';
-import 'screens/screen_test_navigator.dart';
-import 'screens/backend_connectivity_checker.dart';
+import 'screens/routes_screen.dart';
+import 'screens/trip_tracking_screen.dart';
+import 'screens/trip_planner_screen.dart';
+import 'screens/tickets_screen.dart';
+import 'screens/profile_screen.dart';
+import 'screens/map_screen.dart';
+import 'screens/simple_map_test_screen.dart';
+import 'screens/basic_location_screen.dart';
+import 'services/api_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,11 +33,11 @@ void main() async {
   try {
     await Firebase.initializeApp(
       options: const FirebaseOptions(
-        apiKey: 'AIzaSyCMaSRN0-SOHUcFQ8Ctr43aS-hlixYBvs8',
-        appId: '1:220609135478:android:a9e1a54c10196eadf07057',
-        messagingSenderId: '220609135478',
-        projectId: 'transit-live-pro',
-        storageBucket: 'transit-live-pro.firebasestorage.app',
+        apiKey: 'AIzaSyCAQJ1aUoltX6D1uys_kb44uT835prFpig',
+        appId: '1:562185660729:web:79fd7c568a1de3a27a589d',
+        messagingSenderId: '562185660729',
+        projectId: 'transitlive-pro',
+        storageBucket: 'transitlive-pro.firebasestorage.app',
       ),
     );
     debugPrint('✅ Firebase initialized successfully');
@@ -54,13 +62,18 @@ class TransitLiveApp extends StatelessWidget {
         fontFamily: 'Inter',
         scaffoldBackgroundColor: Color(0xFFF5F5F8),
       ),
-      home: const WelcomeScreen(),
+      home: const AuthGuard(),
       routes: {
-        '/welcome': (context) => const WelcomeScreen(),
+        '/auth': (context) => const AuthGuard(),
         '/login': (context) => LoginScreen(),
         '/signup': (context) => SignUpScreen(),
         '/location': (context) => LocationPermissionScreen(),
-        '/home': (context) => const HomeScreen(),
+        '/home': (context) => const MainNavigationScreen(),
+        '/routes': (context) => const RoutesScreen(),
+        '/trip-tracking': (context) => const TripTrackingScreen(),
+        '/trip-planner': (context) => const TripPlannerScreen(),
+        '/tickets': (context) => const TicketsScreen(),
+        '/profile': (context) => const ProfileScreen(),
         '/crowd-reporting': (context) => const CrowdReportingScreen(),
         '/commuter-profile': (context) => const CommuterProfileScreen(),
         '/route-insights': (context) => const RouteInsightsScreen(),
@@ -73,13 +86,87 @@ class TransitLiveApp extends StatelessWidget {
         '/admin-crowd-analytics': (context) => const AdminCrowdAnalyticsScreen(),
         '/admin-broadcast': (context) => const AdminEmergencyBroadcastScreen(),
         '/schedule-feedback': (context) => const ScheduleFeedbackScreen(),
-        '/test-navigator': (context) => const ScreenTestNavigator(),
-        '/backend-check': (context) => const BackendConnectivityChecker(),
       },
     );
   }
 }
 
+// Authentication Guard - checks if user is logged in
+class AuthGuard extends StatefulWidget {
+  const AuthGuard({super.key});
+
+  @override
+  State<AuthGuard> createState() => _AuthGuardState();
+}
+
+class _AuthGuardState extends State<AuthGuard> {
+  bool _isLoading = true;
+  bool _isLoggedIn = false;
+  String? _role;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAuthStatus();
+  }
+
+  Future<void> _checkAuthStatus() async {
+    try {
+      final apiService = ApiService();
+      final token = await apiService.getStoredToken();
+      
+      if (token != null) {
+        // Test if token is still valid by checking backend health
+        final health = await apiService.checkBackendHealth();
+        final role = await apiService.getStoredRole();
+        setState(() {
+          _isLoggedIn = health['status'] == 'success';
+          _role = role;
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _isLoggedIn = false;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _isLoggedIn = false;
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 20),
+              Text('Loading TransitLive Pro...'),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_isLoggedIn) {
+      if (_role == 'driver') {
+        return const TripInitializationScreen();
+      }
+      return const MainNavigationScreen();
+    } else {
+      return const WelcomeScreen();
+    }
+  }
+}
+
+// Welcome Screen for new users
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
 
@@ -87,126 +174,221 @@ class WelcomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      body: Stack(
-        children: [
-          // Main Content
-          Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                // Logo
-                Container(
-                  width: 100,
-                  height: 100,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.blue,
-                  ),
-                  child: Icon(
-                    Icons.directions_bus,
-                    size: 60,
-                    color: Colors.white,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Logo
+              Container(
+                width: 120,
+                height: 120,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: [Colors.blue.shade600, Colors.blue.shade800],
                   ),
                 ),
-                SizedBox(height: 20),
-                // Title
-                Text(
-                  'TransitLive Pro',
-                  style: TextStyle(
-                    fontSize: 36,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF0066FF),
-                  ),
+                child: const Icon(
+                  Icons.directions_bus,
+                  size: 70,
+                  color: Colors.white,
                 ),
-                SizedBox(height: 10),
-                // Tagline
-                Text(
-                  'Democratizing comfortable public transport.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.grey,
-                  ),
+              ),
+              const SizedBox(height: 30),
+              // Title
+              const Text(
+                'TransitLive Pro',
+                style: TextStyle(
+                  fontSize: 42,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0066FF),
                 ),
-                SizedBox(height: 40),
-                // Buttons
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    ElevatedButton(
+              ),
+              const SizedBox(height: 10),
+              // Tagline
+              const Text(
+                'Real-time public transport tracking\nfor smarter commuting',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 18,
+                  color: Colors.grey,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 50),
+              // Features
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildFeature(Icons.location_on, 'Live GPS'),
+                  _buildFeature(Icons.people, 'Crowd Info'),
+                  _buildFeature(Icons.schedule, 'Real ETAs'),
+                ],
+              ),
+              const SizedBox(height: 50),
+              // Buttons
+              Column(
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton(
                       onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => LocationPermissionScreen()),
-                        );
+                        Navigator.pushNamed(context, '/signup');
                       },
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue,
-                        padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                        backgroundColor: Colors.blue.shade600,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
-                      child: Text('Get Started', style: TextStyle(color: Colors.white)),
+                      child: const Text(
+                        'Get Started',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
-                    SizedBox(width: 20),
-                    OutlinedButton(
+                  ),
+                  const SizedBox(height: 15),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: OutlinedButton(
                       onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => LoginScreen()),
-                        );
+                        Navigator.pushNamed(context, '/login');
                       },
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.blue,
-                        padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                        foregroundColor: Colors.blue.shade600,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
-                      child: Text('Sign In'),
+                      child: const Text(
+                        'Sign In',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 30),
+              // Status
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.green.shade200),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.green.shade600, size: 16),
+                    const SizedBox(width: 8),
+                    Text(
+                      'All systems operational',
+                      style: TextStyle(
+                        color: Colors.green.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ],
                 ),
-                SizedBox(height: 20),
-                // Version Info
-                Text(
-                  'v2.4.0 Live Network',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey,
-                  ),
-                ),
-                Text(
-                  'All systems operational',
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Colors.grey,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.pushNamed(context, '/test-navigator');
-        },
-        backgroundColor: Colors.orange,
-        icon: const Icon(Icons.bug_report),
-        label: const Text('Test Screens'),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-      bottomNavigationBar: BottomAppBar(
-        child: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: ElevatedButton.icon(
-            onPressed: () {
-              Navigator.pushNamed(context, '/backend-check');
-            },
-            icon: const Icon(Icons.cloud_queue),
-            label: const Text('Check Backend Connection'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red.shade700,
-              foregroundColor: Colors.white,
-            ),
+              ),
+            ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildFeature(IconData icon, String label) {
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade50,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, color: Colors.blue.shade600, size: 24),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.grey.shade700,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// Main Navigation Screen with bottom navigation
+class MainNavigationScreen extends StatefulWidget {
+  const MainNavigationScreen({super.key});
+
+  @override
+  State<MainNavigationScreen> createState() => _MainNavigationScreenState();
+}
+
+class _MainNavigationScreenState extends State<MainNavigationScreen> {
+  int _currentIndex = 0;
+  
+  final List<Widget> _screens = [
+    const HomeScreen(),
+    const RoutesScreen(),
+    const TripTrackingScreen(),
+    const TicketsScreen(),
+    const ProfileScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: _screens[_currentIndex],
+      bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed,
+        currentIndex: _currentIndex,
+        onTap: (index) {
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+        selectedItemColor: Colors.blue.shade600,
+        unselectedItemColor: Colors.grey,
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.route),
+            label: 'Routes',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.location_on),
+            label: 'Track',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.confirmation_number),
+            label: 'Tickets',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person),
+            label: 'Profile',
+          ),
+        ],
       ),
     );
   }

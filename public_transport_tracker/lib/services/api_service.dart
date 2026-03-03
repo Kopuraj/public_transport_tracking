@@ -4,9 +4,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 
 class ApiConfig {
-  static const String baseUrl = 'http://localhost:5000/api';
-  // For real device testing, use your machine IP:
-  // static const String baseUrl = 'http://192.168.x.x:5000/api';
+  static const String baseUrl = 'http://192.168.1.130:5000/api';
+  static const String wsUrl = 'ws://192.168.1.130:5000';
+  // For local testing:
+  // static const String baseUrl = 'http://localhost:5000/api';
 }
 
 class ApiService {
@@ -17,6 +18,10 @@ class ApiService {
   }
   
   ApiService._internal();
+
+  // ============================================
+  // TOKEN MANAGEMENT
+  // ============================================
 
   Future<String?> _getToken() async {
     final prefs = await SharedPreferences.getInstance();
@@ -33,8 +38,38 @@ class ApiService {
     await prefs.remove('auth_token');
   }
 
+  Future<String?> _getUserId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('user_id');
+  }
+
+  Future<void> _saveUserId(String userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_id', userId);
+  }
+
+  Future<String?> _getUserRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('user_role');
+  }
+
+  Future<void> _saveUserRole(String role) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_role', role);
+  }
+
+  // Public method to access stored token
+  Future<String?> getStoredToken() async {
+    return await _getToken();
+  }
+
+  // Public method to access stored role
+  Future<String?> getStoredRole() async {
+    return await _getUserRole();
+  }
+
   // ============================================
-  // AUTHENTICATION ENDPOINTS
+  // 1. AUTHENTICATION ENDPOINTS
   // ============================================
 
   Future<Map<String, dynamic>> signUp({
@@ -42,6 +77,7 @@ class ApiService {
     required String password,
     required String fullName,
     String role = 'passenger',
+    String? phone,
   }) async {
     try {
       final response = await http.post(
@@ -52,21 +88,29 @@ class ApiService {
           'password': password,
           'fullName': fullName,
           'role': role,
+          'phone': phone,
         }),
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['success'] && data['token'] != null) {
           await _saveToken(data['token']);
+          if (data['user']['uid'] != null) {
+            await _saveUserId(data['user']['uid']);
+          }
+          if (data['user']['role'] != null) {
+            await _saveUserRole(data['user']['role']);
+          }
         }
         return data;
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Signup failed');
+        final error = jsonDecode(response.body);
+        throw Exception(error['error'] ?? 'Signup failed');
       }
     } catch (e) {
-      debugPrint('SignUp Error: $e');
-      throw Exception('Network error: $e');
+      debugPrint('❌ SignUp Error: $e');
+      throw Exception('Signup error: $e');
     }
   }
 
@@ -82,35 +126,115 @@ class ApiService {
           'email': email,
           'password': password,
         }),
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['success'] && data['token'] != null) {
           await _saveToken(data['token']);
+          if (data['user']['uid'] != null) {
+            await _saveUserId(data['user']['uid']);
+          }
+          if (data['user']['role'] != null) {
+            await _saveUserRole(data['user']['role']);
+          }
         }
         return data;
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Login failed');
+        final error = jsonDecode(response.body);
+        throw Exception(error['error'] ?? 'Login failed');
       }
     } catch (e) {
-      debugPrint('Login Error: $e');
-      throw Exception('Network error: $e');
+      debugPrint('❌ Login Error: $e');
+      throw Exception('Login error: $e');
     }
   }
 
   Future<void> logout() async {
-    await _clearToken();
+    try {
+      final token = await _getToken();
+      if (token != null) {
+        await http.post(
+          Uri.parse('${ApiConfig.baseUrl}/auth/logout'),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Content-Type': 'application/json',
+          },
+        ).timeout(const Duration(seconds: 10));
+      }
+    } catch (e) {
+      debugPrint('Logout error: $e');
+    } finally {
+      await _clearToken();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('user_id');
+      await prefs.remove('user_role');
+    }
   }
 
   // ============================================
-  // TRIP MANAGEMENT ENDPOINTS
+  // 2. ROUTES ENDPOINTS
+  // ============================================
+
+  Future<Map<String, dynamic>> getAllRoutes() async {
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/routes'),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Failed to fetch routes');
+      }
+    } catch (e) {
+      debugPrint('❌ Get Routes Error: $e');
+      throw Exception('Failed to fetch routes: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> getRoute(String routeId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/routes/$routeId'),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Route not found');
+      }
+    } catch (e) {
+      debugPrint('❌ Get Route Error: $e');
+      throw Exception('Failed to fetch route: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> getActiveTripsOnRoute(String routeId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/routes/$routeId/active-trips'),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Failed to fetch active trips');
+      }
+    } catch (e) {
+      debugPrint('❌ Get Active Trips Error: $e');
+      throw Exception('Failed to fetch active trips: $e');
+    }
+  }
+
+  // ============================================
+  // 3. TRIP MANAGEMENT ENDPOINTS
   // ============================================
 
   Future<Map<String, dynamic>> initializeTrip({
-    required String driverId,
     required String vehicleId,
     required String routeId,
+    String? conductorId,
   }) async {
     try {
       final token = await _getToken();
@@ -123,9 +247,9 @@ class ApiService {
           'Authorization': 'Bearer $token',
         },
         body: jsonEncode({
-          'driverId': driverId,
           'vehicleId': vehicleId,
           'routeId': routeId,
+          'conductorId': conductorId,
         }),
       ).timeout(const Duration(seconds: 10));
 
@@ -135,7 +259,7 @@ class ApiService {
         throw Exception(jsonDecode(response.body)['error'] ?? 'Trip initialization failed');
       }
     } catch (e) {
-      debugPrint('Initialize Trip Error: $e');
+      debugPrint('❌ Initialize Trip Error: $e');
       throw Exception('Failed to initialize trip: $e');
     }
   }
@@ -145,6 +269,7 @@ class ApiService {
     required double latitude,
     required double longitude,
     double? speed,
+    double? accuracy,
   }) async {
     try {
       final token = await _getToken();
@@ -160,8 +285,9 @@ class ApiService {
           'latitude': latitude,
           'longitude': longitude,
           'speed': speed ?? 0,
+          'accuracy': accuracy,
         }),
-      ).timeout(const Duration(seconds: 5));
+      ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -169,7 +295,7 @@ class ApiService {
         throw Exception('GPS update failed');
       }
     } catch (e) {
-      debugPrint('GPS Update Error: $e');
+      debugPrint('❌ GPS Update Error: $e');
       rethrow;
     }
   }
@@ -186,7 +312,7 @@ class ApiService {
         throw Exception('Failed to fetch trip details');
       }
     } catch (e) {
-      debugPrint('Get Trip Error: $e');
+      debugPrint('❌ Get Trip Error: $e');
       throw Exception('Failed to get trip: $e');
     }
   }
@@ -210,20 +336,20 @@ class ApiService {
         throw Exception('Failed to end trip');
       }
     } catch (e) {
-      debugPrint('End Trip Error: $e');
+      debugPrint('❌ End Trip Error: $e');
       throw Exception('Failed to end trip: $e');
     }
   }
 
   // ============================================
-  // CROWD REPORTING ENDPOINTS
+  // 4. CROWD INTELLIGENCE ENDPOINTS
   // ============================================
 
   Future<Map<String, dynamic>> submitCrowdReport({
     required String tripId,
-    required String crowdLevel, // 'low', 'medium', 'high'
-    required double latitude,
-    required double longitude,
+    required String crowdLevel,
+    required double userLatitude,
+    required double userLongitude,
   }) async {
     try {
       final token = await _getToken();
@@ -238,67 +364,51 @@ class ApiService {
         body: jsonEncode({
           'tripId': tripId,
           'crowdLevel': crowdLevel,
-          'location': {
-            'latitude': latitude,
-            'longitude': longitude,
-          },
+          'userLocation': {
+            'latitude': userLatitude,
+            'longitude': userLongitude,
+          }
         }),
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Report submission failed');
+        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to submit crowd report');
       }
     } catch (e) {
-      debugPrint('Crowd Report Error: $e');
+      debugPrint('❌ Crowd Report Error: $e');
       throw Exception('Failed to submit crowd report: $e');
     }
   }
 
-  // ============================================
-  // ROUTE SEARCH ENDPOINTS
-  // ============================================
-
-  Future<Map<String, dynamic>> searchRoute({
-    required String startPoint,
-    required String endPoint,
-    double? latitude,
-    double? longitude,
-  }) async {
+  Future<Map<String, dynamic>> getCrowdReports(String tripId) async {
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/route/search'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'startPoint': startPoint,
-          'endPoint': endPoint,
-          'currentLocation': {
-            'latitude': latitude ?? 0,
-            'longitude': longitude ?? 0,
-          },
-        }),
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/trips/$tripId/crowd-reports'),
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception('Route search failed');
+        throw Exception('Failed to fetch crowd reports');
       }
     } catch (e) {
-      debugPrint('Route Search Error: $e');
-      throw Exception('Failed to search routes: $e');
+      debugPrint('❌ Get Crowd Reports Error: $e');
+      throw Exception('Failed to fetch crowd reports: $e');
     }
   }
 
   // ============================================
-  // ALERT ENDPOINTS
+  // 5. EMERGENCY ALERTS ENDPOINTS
   // ============================================
 
   Future<Map<String, dynamic>> sendEmergencyAlert({
     required String tripId,
-    required String alertType, // 'breakdown', 'accident', 'medical'
-    required String description,
+    required String alertType,
+    required String message,
+    double? latitude,
+    double? longitude,
   }) async {
     try {
       final token = await _getToken();
@@ -313,62 +423,218 @@ class ApiService {
         body: jsonEncode({
           'tripId': tripId,
           'alertType': alertType,
-          'description': description,
+          'message': message,
+          'location': latitude != null && longitude != null ? {
+            'latitude': latitude,
+            'longitude': longitude,
+          } : null,
         }),
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception('Emergency alert failed');
+        throw Exception('Failed to send emergency alert');
       }
     } catch (e) {
-      debugPrint('Emergency Alert Error: $e');
+      debugPrint('❌ Emergency Alert Error: $e');
       throw Exception('Failed to send emergency alert: $e');
     }
   }
 
+  Future<Map<String, dynamic>> resolveAlert(String alertId) async {
+    try {
+      final token = await _getToken();
+      if (token == null) throw Exception('No authentication token');
+
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/alerts/$alertId/resolve'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Failed to resolve alert');
+      }
+    } catch (e) {
+      debugPrint('❌ Resolve Alert Error: $e');
+      throw Exception('Failed to resolve alert: $e');
+    }
+  }
+
   // ============================================
-  // ADMIN ENDPOINTS
+  // 6. SEARCH & ROUTE INSIGHTS
   // ============================================
 
-  Future<Map<String, dynamic>> getRouteAnalytics(String routeId) async {
+  Future<Map<String, dynamic>> searchRoutes({
+    required String startStop,
+    required String endStop,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/search/routes'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'startStop': startStop,
+          'endStop': endStop,
+        }),
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Route search failed');
+      }
+    } catch (e) {
+      debugPrint('❌ Route Search Error: $e');
+      throw Exception('Failed to search routes: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> getRouteInsights(String routeId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/routes/$routeId/insights'),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Failed to fetch route insights');
+      }
+    } catch (e) {
+      debugPrint('❌ Route Insights Error: $e');
+      throw Exception('Failed to fetch route insights: $e');
+    }
+  }
+
+  // ============================================
+  // 7. USER PROFILE ENDPOINTS
+  // ============================================
+
+  Future<Map<String, dynamic>> getUserProfile(String userId) async {
     try {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
       final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/admin/analytics/$routeId'),
+        Uri.parse('${ApiConfig.baseUrl}/users/$userId'),
         headers: {'Authorization': 'Bearer $token'},
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
-      } else if (response.statusCode == 403) {
-        throw Exception('Not authorized to view analytics');
       } else {
-        throw Exception('Failed to fetch analytics');
+        throw Exception('Failed to fetch profile');
       }
     } catch (e) {
-      debugPrint('Analytics Error: $e');
-      throw Exception('Failed to get analytics: $e');
+      debugPrint('❌ Get Profile Error: $e');
+      throw Exception('Failed to get profile: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> updateUserProfile({
+    required String userId,
+    String? fullName,
+    String? phone,
+    Map<String, dynamic>? preferences,
+  }) async {
+    try {
+      final token = await _getToken();
+      if (token == null) throw Exception('No authentication token');
+
+      final response = await http.put(
+        Uri.parse('${ApiConfig.baseUrl}/users/$userId/profile'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'fullName': fullName,
+          'phone': phone,
+          'preferences': preferences,
+        }),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Failed to update profile');
+      }
+    } catch (e) {
+      debugPrint('❌ Update Profile Error: $e');
+      throw Exception('Failed to update profile: $e');
     }
   }
 
   // ============================================
-  // HEALTH CHECK
+  // 8. ADMIN ENDPOINTS
   // ============================================
 
-  Future<bool> checkBackendHealth() async {
+  Future<Map<String, dynamic>> getAdminDashboard() async {
+    try {
+      final token = await _getToken();
+      if (token == null) throw Exception('No authentication token');
+
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/admin/dashboard'),
+        headers: {'Authorization': 'Bearer $token'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Access denied');
+      }
+    } catch (e) {
+      debugPrint('❌ Admin Dashboard Error: $e');
+      throw Exception('Failed to fetch admin dashboard: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> getRouteAnalytics() async {
+    try {
+      final token = await _getToken();
+      if (token == null) throw Exception('No authentication token');
+
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/admin/analytics/routes'),
+        headers: {'Authorization': 'Bearer $token'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Access denied');
+      }
+    } catch (e) {
+      debugPrint('❌ Route Analytics Error: $e');
+      throw Exception('Failed to fetch analytics: $e');
+    }
+  }
+
+  // ============================================
+  // 9. HEALTH CHECK ENDPOINTS
+  // ============================================
+
+  Future<Map<String, dynamic>> checkBackendHealth() async {
     try {
       final response = await http.get(
         Uri.parse('${ApiConfig.baseUrl}/health'),
-      ).timeout(const Duration(seconds: 5));
+      ).timeout(const Duration(seconds: 10));
 
-      return response.statusCode == 200;
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        return {'success': false, 'status': 'unhealthy'};
+      }
     } catch (e) {
-      debugPrint('Health Check Error: $e');
-      return false;
+      debugPrint('❌ Health Check Error: $e');
+      return {'success': false, 'status': 'unreachable', 'error': e.toString()};
     }
   }
 
@@ -376,15 +642,16 @@ class ApiService {
     try {
       final response = await http.get(
         Uri.parse('${ApiConfig.baseUrl}/status'),
-      ).timeout(const Duration(seconds: 5));
+      ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
+      } else {
+        throw Exception('Failed to fetch status');
       }
-      throw Exception('Failed to get status');
     } catch (e) {
-      debugPrint('Status Check Error: $e');
-      throw Exception('Backend unreachable: $e');
+      debugPrint('❌ Status Check Error: $e');
+      throw Exception('Failed to check status: $e');
     }
   }
 }

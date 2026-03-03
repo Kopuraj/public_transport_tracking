@@ -45,6 +45,17 @@ dependencies:
   
   # Local storage
   shared_preferences: ^2.2.0
+  
+  # Maps and location (OpenStreetMap - FREE!)
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+  location: ^5.0.3
+  geolocator: ^10.1.0
+  
+  # Additional UI packages
+  flutter_polyline_points: ^3.1.0
+  url_launcher: ^6.2.1
+  socket_io_client: ^2.0.3
 
 dev_dependencies:
   flutter_test:

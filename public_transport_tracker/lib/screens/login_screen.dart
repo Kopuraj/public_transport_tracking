@@ -41,7 +41,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       // Call auth service to login
-      await _authService.login(
+      final response = await _authService.login(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
@@ -49,10 +49,17 @@ class _LoginScreenState extends State<LoginScreen> {
       // Show success message
       _showSuccess('Login successful!');
 
-      // Navigate to home screen after 2 seconds
-      await Future.delayed(Duration(seconds: 2));
+      // Get user role
+      final role = response['user']['role'] ?? 'passenger';
+
+      // Navigate based on role after 1 second
+      await Future.delayed(Duration(seconds: 1));
       if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/home');
+        if (role == 'driver') {
+          Navigator.of(context).pushReplacementNamed('/trip-initialization');
+        } else {
+          Navigator.of(context).pushReplacementNamed('/home');
+        }
       }
     } catch (e) {
       _showError(e.toString().replaceAll('Exception: ', ''));
