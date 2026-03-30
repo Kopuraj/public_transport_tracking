@@ -16,13 +16,17 @@ class DriverTripDashboardScreen extends StatefulWidget {
 class _DriverTripDashboardScreenState extends State<DriverTripDashboardScreen> {
   int _passengerCount = 24;
   final int _maxCapacity = 55;
-  
+
   // Real-time tracking variables
   StreamSubscription<Position>? _positionSubscription;
   bool _isTracking = false;
   String? _currentTripId;
   String _statusText = 'Initializing...';
   double _currentCompletion = 0.0;
+
+  // Required missing variables
+  bool _isLoading = false;
+  final ApiService _apiService = ApiService();
 
   @override
   void initState() {
@@ -542,16 +546,19 @@ class _DriverTripDashboardScreenState extends State<DriverTripDashboardScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton(
-                      onPressed: () {
-                        // End trip and navigate to summary
-                        Navigator.pushNamed(context, '/trip-summary');
-                      },
+                      onPressed: _isLoading ? null : _showEndTripDialog,
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.blue,
-                        side: BorderSide(color: Colors.blue),
+                        foregroundColor: Colors.red,
+                        side: BorderSide(color: Colors.red),
                         padding: EdgeInsets.symmetric(vertical: 12),
                       ),
-                      child: Text('End Trip'),
+                      child: _isLoading 
+                          ? SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text('End Trip'),
                     ),
                   ),
                 ],
@@ -563,5 +570,134 @@ class _DriverTripDashboardScreenState extends State<DriverTripDashboardScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _showEndTripDialog() async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false, // Prevent dismissing by tapping outside
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('End Trip'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Are you sure you want to end this trip?',
+              style: TextStyle(fontSize: 16),
+            ),
+            SizedBox(height: 12),
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Trip Summary:',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  SizedBox(height: 4),
+                  Text('Route: Galle - Hapugala'),
+                  Text('Vehicle: NB-4562'),
+                  Text('Duration: ${_formatDuration(_getElapsedTime())}'),
+                  Text('Total Passengers: ${_passengerCount.toString()}'),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: Text('End Trip'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true) {
+      await _endTrip();
+    }
+  }
+
+  Future<void> _endTrip() async {
+    setState(() => _isLoading = true);
+
+    try {
+      // Stop GPS updates first
+      await _positionSubscription?.cancel();
+      _positionSubscription = null;
+
+      // End trip via API
+      final response = await _apiService.endTrip(_currentTripId!);
+
+      if (!mounted) return;
+
+      if (response['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Trip ended successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        Navigator.pushReplacementNamed(
+          context,
+          '/trip-summary',
+          arguments: {
+            'tripId': _currentTripId,
+            'vehicleNumber': 'NB-4562',
+            'route': 'Galle - Hapugala',
+            'duration': _formatDuration(_getElapsedTime()),
+            'totalPassengers': _passengerCount,
+            'endTime': DateTime.now(),
+          },
+        );
+      } else {
+        throw Exception('Failed to end trip');
+      }
+    } catch (e) {
+      debugPrint('❌ End trip error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error ending trip: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Duration _getElapsedTime() {
+    // Calculate elapsed time since trip start
+    // In a real app, this would be based on actual trip start time from API
+    return Duration(hours: 0, minutes: 45); // Example duration
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    String twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
+    return '${twoDigits(duration.inHours)}:$twoDigitMinutes';
   }
 }

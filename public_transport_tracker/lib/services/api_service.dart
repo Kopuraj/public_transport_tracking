@@ -341,6 +341,34 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> cancelTrip(String tripId, String reason) async {
+    try {
+      final token = await _getToken();
+      if (token == null) throw Exception('No authentication token');
+
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/trips/$tripId/cancel'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'reason': reason,
+          'cancelledAt': DateTime.now().toIso8601String(),
+        }),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Failed to cancel trip');
+      }
+    } catch (e) {
+      debugPrint('❌ Cancel Trip Error: $e');
+      throw Exception('Failed to cancel trip: $e');
+    }
+  }
+
   // ============================================
   // 4. CROWD INTELLIGENCE ENDPOINTS
   // ============================================

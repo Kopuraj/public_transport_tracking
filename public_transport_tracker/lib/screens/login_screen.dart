@@ -56,9 +56,9 @@ class _LoginScreenState extends State<LoginScreen> {
       await Future.delayed(Duration(seconds: 1));
       if (mounted) {
         if (role == 'driver') {
-          Navigator.of(context).pushReplacementNamed('/trip-initialization');
+          Navigator.of(context).pushNamedAndRemoveUntil('/trip-initialization', (route) => false);
         } else {
-          Navigator.of(context).pushReplacementNamed('/home');
+          Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
         }
       }
     } catch (e) {

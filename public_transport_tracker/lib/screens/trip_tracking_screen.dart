@@ -14,21 +14,43 @@ class TripTrackingScreen extends StatefulWidget {
 }
 
 class _TripTrackingScreenState extends State<TripTrackingScreen> {
-  int _selectedLoad = 2; // 0: Light, 1: Medium, 2: Heavy
-  
-  LatLng _busLocation = const LatLng(13.0827, 80.2707); // Default
-  String _etaText = '3 min';
-  String _occupancyText = 'HEAVY';
+  final ApiService _apiService = ApiService();
   final MapController _mapController = MapController();
-  bool _isMapReady = false; // Add this
-  
+
+  // Selected route and trip
+  Map<String, dynamic>? _selectedRoute;
+  Map<String, dynamic>? _selectedTrip;
+
+  // Live tracking state
+  LatLng _busLocation = const LatLng(6.0329, 80.2168); // Default: Galle
+  String _etaText = '--';
+  String _occupancyText = 'Unknown';
+  bool _isMapReady = false;
+
+  // Loading states
+  bool _loadingRoutes = true;
+  bool _loadingTrips = false;
+  List<Map<String, dynamic>> _routes = [];
+  List<Map<String, dynamic>> _activeTrips = [];
+
   StreamSubscription? _gpsSubscription;
   StreamSubscription? _crowdSubscription;
 
   @override
   void initState() {
     super.initState();
-    _connectToRealTimeUpdates();
+    _loadRoutes();
+    SocketService().connect();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Accept route passed from Routes screen
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args != null && args is Map<String, dynamic> && _selectedRoute == null) {
+      _selectRoute(args);
+    }
   }
 
   @override
@@ -38,22 +60,68 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     super.dispose();
   }
 
-  void _connectToRealTimeUpdates() {
-    SocketService().connect();
-    
+  Future<void> _loadRoutes() async {
+    setState(() => _loadingRoutes = true);
+    try {
+      final result = await _apiService.getAllRoutes();
+      if (result['success'] == true) {
+        setState(() {
+          _routes = List<Map<String, dynamic>>.from(result['routes'] ?? []);
+          _loadingRoutes = false;
+        });
+      } else {
+        setState(() => _loadingRoutes = false);
+      }
+    } catch (e) {
+      setState(() => _loadingRoutes = false);
+    }
+  }
+
+  Future<void> _selectRoute(Map<String, dynamic> route) async {
+    setState(() {
+      _selectedRoute = route;
+      _selectedTrip = null;
+      _activeTrips = [];
+      _loadingTrips = true;
+    });
+
+    try {
+      final routeId = route['id'] ?? '';
+      final result = await _apiService.getActiveTripsOnRoute(routeId);
+      if (result['success'] == true) {
+        setState(() {
+          _activeTrips = List<Map<String, dynamic>>.from(result['trips'] ?? []);
+          _loadingTrips = false;
+        });
+      } else {
+        setState(() => _loadingTrips = false);
+      }
+    } catch (e) {
+      setState(() => _loadingTrips = false);
+    }
+  }
+
+  void _selectTrip(Map<String, dynamic> trip) {
+    _gpsSubscription?.cancel();
+    _crowdSubscription?.cancel();
+
+    setState(() => _selectedTrip = trip);
+
+    final tripId = trip['id'] ?? '';
+    SocketService().emit('subscribe-trip', tripId);
+
     _gpsSubscription = SocketService().gpsUpdates.listen((data) {
       if (!mounted) return;
-      if (data['location'] != null) {
+      if (data['tripId'] == tripId && data['location'] != null) {
         setState(() {
           _busLocation = LatLng(
-            data['location']['latitude'],
-            data['location']['longitude']
+            (data['location']['latitude'] as num).toDouble(),
+            (data['location']['longitude'] as num).toDouble(),
           );
           if (data['eta'] != null) {
             _etaText = '${data['eta']['etaMinutes']} min';
           }
         });
-        // Move map only when ready
         if (_isMapReady) {
           _mapController.move(_busLocation, _mapController.camera.zoom);
         }
@@ -63,9 +131,8 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     _crowdSubscription = SocketService().crowdUpdates.listen((data) {
       if (!mounted) return;
       setState(() {
-        final level = data['crowdLevel']?.toString().toUpperCase() ?? 'MEDIUM';
-        _occupancyText = level;
-        _selectedLoad = level == 'AVAILABLE' ? 0 : level == 'STANDING' ? 1 : 2;
+        _occupancyText =
+            data['crowdLevel']?.toString().toUpperCase() ?? 'Unknown';
       });
     });
   }
@@ -77,470 +144,445 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 1,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Galle - Hapugala',
-              style: TextStyle(
-                color: Color(0xFF0D131B),
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+        title: Text(
+          _selectedRoute == null
+              ? 'Track a Bus'
+              : '${_selectedRoute!['from']} → ${_selectedRoute!['to']}',
+          style: const TextStyle(
+              color: Color(0xFF0D131B),
+              fontSize: 18,
+              fontWeight: FontWeight.bold),
+        ),
+        actions: [
+          if (_selectedRoute != null)
+            TextButton(
+              onPressed: () => setState(() {
+                _selectedRoute = null;
+                _selectedTrip = null;
+                _gpsSubscription?.cancel();
+                _crowdSubscription?.cancel();
+              }),
+              child: const Text('Change Route',
+                  style: TextStyle(color: Color(0xFF136AEC))),
             ),
-            const Text(
-              'To Ruhuna Engineering',
-              style: TextStyle(
-                color: Color(0xFF999CA6),
-                fontSize: 12,
-              ),
+        ],
+      ),
+      body: _selectedRoute == null
+          ? _buildRoutePicker()
+          : _selectedTrip == null
+              ? _buildTripPicker()
+              : _buildLiveTracking(),
+    );
+  }
+
+  // Step 1: Pick a route
+  Widget _buildRoutePicker() {
+    if (_loadingRoutes) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_routes.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.directions_bus_outlined, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            const Text('No routes available',
+                style: TextStyle(color: Colors.grey, fontSize: 16)),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _loadRoutes,
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF136AEC),
+                  foregroundColor: Colors.white),
+              child: const Text('Refresh'),
             ),
           ],
         ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.green,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.check_circle, color: Colors.white, size: 16),
-                  SizedBox(width: 6),
-                  Text(
-                    'VALIDATED',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            // Map Section
-            Container(
-              height: 250,
-              margin: const EdgeInsets.all(16),
-              clipBehavior: Clip.antiAlias,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE0E6F2)),
-              ),
-              child: MapService().createMap(
-                center: _busLocation,
-                zoom: 15,
-                mapController: _mapController,
-                onMapReady: () {
-                  setState(() => _isMapReady = true);
-                  debugPrint('🗺️ Trip Tracking Map Ready');
-                },
-                markers: [
-                  MapService().createBusMarker(_busLocation, busNumber: "NB-4562"),
-                ],
-              ),
-            ),
+      );
+    }
 
-            // Next Stop Section
-            Container(
-              margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Color(0xFFF0F5FF),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Color(0xFFE0E6F2)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+          child: Text('Select a route to track',
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0D131B))),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemCount: _routes.length,
+            itemBuilder: (context, index) {
+              final route = _routes[index];
+              return GestureDetector(
+                onTap: () => _selectRoute(route),
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFE0E6F2)),
+                  ),
+                  child: Row(
                     children: [
-                      Text(
-                        'NEXT STOP',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF136AEC),
-                          letterSpacing: 0.5,
-                        ),
-                      ),
                       Container(
-                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
-                          color: Color(0xFF136AEC),
-                          borderRadius: BorderRadius.circular(20),
+                          color: const Color(0xFF136AEC),
+                          borderRadius: BorderRadius.circular(8),
                         ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.schedule, color: Colors.white, size: 14),
-                            SizedBox(width: 4),
-                            Text(
-                              _etaText,
-                              style: TextStyle(
+                        child: Text(route['routeNumber'] ?? '',
+                            style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 12,
                                 fontWeight: FontWeight.bold,
-                              ),
+                                fontSize: 16)),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${route['from']} → ${route['to']}',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF0D131B)),
+                            ),
+                            Text(
+                              '${route['fare']} · ${route['frequency']}',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFF999CA6)),
                             ),
                           ],
                         ),
                       ),
+                      const Icon(Icons.chevron_right, color: Color(0xFF999CA6)),
                     ],
                   ),
-                  SizedBox(height: 12),
-                  Text(
-                    'Karapitiya Junction',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF0D131B),
-                    ),
-                  ),
-                  SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Icon(Icons.access_time, color: Colors.green, size: 16),
-                      SizedBox(width: 8),
-                      Text(
-                        'Arriving at 8:45 AM',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.green,
-                        ),
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        '• On Time',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.green,
-                        ),
-                      ),
-                    ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Step 2: Pick an active trip on that route
+  Widget _buildTripPicker() {
+    if (_loadingTrips) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Route info header
+        Container(
+          margin: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF0F5FF),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFE0E6F2)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.route, color: Color(0xFF136AEC)),
+              const SizedBox(width: 10),
+              Text(
+                'Route ${_selectedRoute!['routeNumber']} — ${_selectedRoute!['from']} to ${_selectedRoute!['to']}',
+                style: const TextStyle(
+                    fontWeight: FontWeight.w600, color: Color(0xFF0D131B)),
+              ),
+            ],
+          ),
+        ),
+
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: Text('Active buses on this route',
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0D131B))),
+        ),
+        const SizedBox(height: 8),
+
+        if (_activeTrips.isEmpty)
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.directions_bus_outlined,
+                      size: 64, color: Colors.grey),
+                  const SizedBox(height: 16),
+                  const Text('No active buses on this route right now',
+                      style: TextStyle(color: Colors.grey)),
+                  const SizedBox(height: 8),
+                  const Text('A driver needs to start a trip first',
+                      style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  const SizedBox(height: 20),
+                  ElevatedButton(
+                    onPressed: () => _selectRoute(_selectedRoute!),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF136AEC),
+                        foregroundColor: Colors.white),
+                    child: const Text('Refresh'),
                   ),
                 ],
               ),
             ),
-
-            // Journey Progress Section
-            Container(
-              margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Color(0xFFE0E6F2)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.directions_bus, color: Color(0xFF136AEC)),
-                          SizedBox(width: 8),
-                          Text(
-                            'Heading to Hapugala',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF0D131B),
-                            ),
+          )
+        else
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: _activeTrips.length,
+              itemBuilder: (context, index) {
+                final trip = _activeTrips[index];
+                return GestureDetector(
+                  onTap: () => _selectTrip(trip),
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFE0E6F2)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade50,
+                            shape: BoxShape.circle,
                           ),
-                        ],
-                      ),
-                      Text(
-                        '60%',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF136AEC),
+                          child: Icon(Icons.directions_bus,
+                              color: Colors.green.shade600),
                         ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 12),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: LinearProgressIndicator(
-                      value: 0.6,
-                      minHeight: 8,
-                      backgroundColor: Color(0xFFE0E6F2),
-                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF136AEC)),
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Started: 8:25 AM',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF999CA6),
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      Text(
-                        '4 stops remaining',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF999CA6),
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            // Bus Load Section
-            Container(
-              margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Color(0xFFE0E6F2)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.group, color: Color(0xFF136AEC), size: 20),
-                      SizedBox(width: 8),
-                      Text(
-                        'Current bus load',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF0D131B),
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      _buildLoadOption(0, 'LIGHT'),
-                      _buildLoadOption(1, 'MEDIUM'),
-                      _buildLoadOption(2, 'HEAVY'),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            // Timeline Section
-            Container(
-              margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Color(0xFFE0E6F2)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Upcoming Timeline',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF0D131B),
-                    ),
-                  ),
-                  SizedBox(height: 16),
-                  _buildTimelineItem('Started', '8:25 AM', 'Galle Fort', true),
-                  _buildTimelineItem('Next', '8:45 AM', 'Karapitiya Junction', false),
-                  _buildTimelineItem('Stop', '9:00 AM', 'Wakwella Road', false),
-                  _buildTimelineItem('Stop', '9:15 AM', 'Matara City', false),
-                  _buildTimelineItem('Final', '9:30 AM', 'Faculty of Engineering', false),
-                ],
-              ),
-            ),
-
-            // Action Buttons
-            Container(
-              margin: EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Issue reported')),
-                        );
-                      },
-                      icon: Icon(Icons.report_problem),
-                      label: Text('Report Issue'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.black,
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    ),
-                  ),
-                  SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        showDialog(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: Text('End Trip?'),
-                            content: Text('Are you sure you want to end this trip?'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: Text('Cancel'),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Bus ${trip['vehicleId'] ?? 'Unknown'}',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF0D131B)),
                               ),
-                              TextButton(
-                                onPressed: () {
-                                  Navigator.pop(context);
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text('Trip ended'),
-                                      backgroundColor: Colors.green,
-                                    ),
-                                  );
-                                },
-                                child: Text('End Trip', style: TextStyle(color: Colors.red)),
+                              Text(
+                                'Trip ID: ${trip['id']?.toString().substring(0, 8) ?? ''}...',
+                                style: const TextStyle(
+                                    fontSize: 11, color: Color(0xFF999CA6)),
                               ),
                             ],
                           ),
-                        );
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      child: Text(
-                        'End Current Trip',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
                         ),
-                      ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade50,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.green),
+                          ),
+                          child: const Text('LIVE',
+                              style: TextStyle(
+                                  color: Colors.green,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 11)),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.chevron_right,
+                            color: Color(0xFF999CA6)),
+                      ],
                     ),
                   ),
-                ],
-              ),
+                );
+              },
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLoadOption(int index, String label) {
-    bool isSelected = _selectedLoad == index;
-    return GestureDetector(
-      onTap: () => setState(() => _selectedLoad = index),
-      child: Container(
-        width: 100,
-        padding: EdgeInsets.symmetric(vertical: 16),
-        decoration: BoxDecoration(
-          color: isSelected ? Color(0xFFF0F5FF) : Color(0xFFF6F7F8),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: isSelected ? Color(0xFF136AEC) : Color(0xFFE0E6F2),
-            width: isSelected ? 2 : 1,
           ),
-        ),
-        child: Column(
-          children: [
-            Icon(
-              Icons.group,
-              color: isSelected ? Color(0xFF136AEC) : Color(0xFF999CA6),
-              size: 24,
-            ),
-            SizedBox(height: 8),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: isSelected ? Color(0xFF136AEC) : Color(0xFF999CA6),
-              ),
-            ),
-          ],
-        ),
-      ),
+      ],
     );
   }
 
-  Widget _buildTimelineItem(String type, String time, String location, bool isActive) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: 12),
-      child: Row(
+  // Step 3: Live tracking map
+  Widget _buildLiveTracking() {
+    final stops = (_selectedRoute!['stops'] as List? ?? [])
+        .map((s) => s as Map<String, dynamic>)
+        .toList();
+
+    Color occupancyColor = Colors.green;
+    if (_occupancyText == 'HEAVY' || _occupancyText == 'FULL') {
+      occupancyColor = Colors.red;
+    } else if (_occupancyText == 'MEDIUM' || _occupancyText == 'STANDING') {
+      occupancyColor = Colors.orange;
+    }
+
+    return SingleChildScrollView(
+      child: Column(
         children: [
-          // Timeline Dot
+          // Map
           Container(
-            width: 12,
-            height: 12,
+            height: 260,
+            margin: const EdgeInsets.all(16),
+            clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: isActive ? Color(0xFF136AEC) : Color(0xFFE0E6F2),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE0E6F2)),
+            ),
+            child: MapService().createMap(
+              center: _busLocation,
+              zoom: 14,
+              mapController: _mapController,
+              onMapReady: () => setState(() => _isMapReady = true),
+              markers: [
+                MapService().createBusMarker(
+                  _busLocation,
+                  busNumber: _selectedRoute!['routeNumber'],
+                ),
+                ...stops.map((stop) {
+                  if (stop['lat'] != null && stop['lng'] != null) {
+                    return MapService().createBusStopMarker(
+                      LatLng((stop['lat'] as num).toDouble(),
+                          (stop['lng'] as num).toDouble()),
+                      stopName: stop['name'],
+                    );
+                  }
+                  return null;
+                }).whereType<Marker>(),
+              ],
             ),
           ),
-          SizedBox(width: 12),
 
-          // Content
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          // ETA & Occupancy
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      location,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF0D131B),
-                      ),
-                    ),
-                    Text(
-                      time,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF999CA6),
-                      ),
-                    ),
-                  ],
+                Expanded(
+                  child: _buildInfoCard(
+                    icon: Icons.schedule,
+                    label: 'ETA',
+                    value: _etaText,
+                    color: const Color(0xFF136AEC),
+                  ),
                 ),
-                SizedBox(height: 2),
-                Text(
-                  type,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Color(0xFF999CA6),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildInfoCard(
+                    icon: Icons.people,
+                    label: 'Occupancy',
+                    value: _occupancyText,
+                    color: occupancyColor,
                   ),
                 ),
               ],
             ),
+          ),
+          const SizedBox(height: 12),
+
+          // Route stops list
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE0E6F2)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Route Stops',
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF0D131B))),
+                const SizedBox(height: 12),
+                ...stops.asMap().entries.map((entry) {
+                  final i = entry.key;
+                  final stop = entry.value;
+                  final isFirst = i == 0;
+                  final isLast = i == stops.length - 1;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: isFirst || isLast
+                                ? const Color(0xFF136AEC)
+                                : const Color(0xFFE0E6F2),
+                            border: Border.all(
+                                color: const Color(0xFF136AEC), width: 1.5),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(stop['name'] ?? '',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: isFirst || isLast
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                                color: const Color(0xFF0D131B))),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoCard(
+      {required IconData icon,
+      required String label,
+      required String value,
+      required Color color}) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE0E6F2)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 22),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF999CA6),
+                      fontWeight: FontWeight.w600)),
+              Text(value,
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: color)),
+            ],
           ),
         ],
       ),

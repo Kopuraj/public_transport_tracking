@@ -10,11 +10,12 @@ class TripInitializationScreen extends StatefulWidget {
 }
 
 class _TripInitializationScreenState extends State<TripInitializationScreen> {
-  String _selectedVehicle = 'NB-4562';
-  String _selectedRouteId = 'route_502';
-  String _selectedRouteName = '502: Galle - Hapugala';
+  final _vehicleController = TextEditingController(text: 'NB-4562');
+  Map<String, dynamic>? _selectedRoute;
   bool _isInitializing = false;
-  List<dynamic> _routes = [];
+  bool _loadingRoutes = true;
+  List<Map<String, dynamic>> _routes = [];
+  String? _loadError;
 
   @override
   void initState() {
@@ -22,32 +23,59 @@ class _TripInitializationScreenState extends State<TripInitializationScreen> {
     _loadRoutes();
   }
 
+  @override
+  void dispose() {
+    _vehicleController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadRoutes() async {
+    setState(() { _loadingRoutes = true; _loadError = null; });
     try {
       final response = await ApiService().getAllRoutes();
-      if (response['success'] && response['routes'] != null) {
+      if (response['success'] == true && response['routes'] != null) {
+        final routes = List<Map<String, dynamic>>.from(response['routes']);
         setState(() {
-          _routes = response['routes'];
-          if (_routes.isNotEmpty) {
-            _selectedRouteId = _routes[0]['id'];
-            _selectedRouteName = '${_routes[0]['routeNumber']}: ${_routes[0]['name']}';
-          }
+          _routes = routes;
+          _selectedRoute = routes.isNotEmpty ? routes[0] : null;
+          _loadingRoutes = false;
+        });
+      } else {
+        setState(() {
+          _loadError = response['error'] ?? 'Failed to load routes';
+          _loadingRoutes = false;
         });
       }
     } catch (e) {
-      debugPrint('Error loading routes: $e');
+      setState(() {
+        _loadError = 'Cannot connect to server';
+        _loadingRoutes = false;
+      });
     }
   }
 
   Future<void> _handleStartTrip() async {
+    if (_selectedRoute == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a route first'), backgroundColor: Colors.red),
+      );
+      return;
+    }
+    if (_vehicleController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a vehicle ID'), backgroundColor: Colors.red),
+      );
+      return;
+    }
+
     setState(() => _isInitializing = true);
     try {
       final response = await ApiService().initializeTrip(
-        vehicleId: _selectedVehicle,
-        routeId: _selectedRouteId,
+        vehicleId: _vehicleController.text.trim(),
+        routeId: _selectedRoute!['id'],
       );
 
-      if (response['success']) {
+      if (response['success'] == true) {
         final tripId = response['tripId'];
         if (mounted) {
           Navigator.pushReplacement(
@@ -63,13 +91,14 @@ class _TripInitializationScreenState extends State<TripInitializationScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(e.toString().replaceAll('Exception: ', '')),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => _isInitializing = false);
-      }
+      if (mounted) setState(() => _isInitializing = false);
     }
   }
 
@@ -94,9 +123,10 @@ class _TripInitializationScreenState extends State<TripInitializationScreen> {
                   ),
                   TextButton(
                     onPressed: () async {
-                      await ApiService().logout();
+                      Navigator.pop(context);
+                      try { await ApiService().logout(); } catch (_) {}
                       if (context.mounted) {
-                        Navigator.of(context).pushReplacementNamed('/welcome');
+                        Navigator.of(context).pushNamedAndRemoveUntil('/welcome', (route) => false);
                       }
                     },
                     child: const Text('Logout', style: TextStyle(color: Colors.red)),
@@ -147,191 +177,112 @@ class _TripInitializationScreenState extends State<TripInitializationScreen> {
               ),
             ),
 
-            // Select Vehicle Section
+            // Vehicle ID input
             Padding(
-              padding: EdgeInsets.all(16),
+              padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Select Vehicle',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF0D131B),
-                    ),
-                  ),
-                  SizedBox(height: 12),
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-                    decoration: BoxDecoration(
-                      color: Color(0xFFF6F7F8),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Color(0xFFE0E6F2)),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.directions_bus, color: Color(0xFF136AEC)),
-                            SizedBox(width: 12),
-                            Text(
-                              _selectedVehicle,
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF0D131B),
-                              ),
-                            ),
-                          ],
-                        ),
-                        Icon(Icons.arrow_forward_ios, color: Color(0xFF999CA6), size: 16),
-                      ],
-                    ),
-                  ),
-                  SizedBox(height: 12),
-                  Container(
-                    padding: EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Color(0xFFF0F5FF),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      'System Ready: GPS sharing will begin after launch start',
+                  const Text('Vehicle ID',
                       style: TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF136AEC),
-                        fontWeight: FontWeight.w500,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF0D131B))),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _vehicleController,
+                    decoration: InputDecoration(
+                      hintText: 'e.g. NB-4562',
+                      prefixIcon: const Icon(Icons.directions_bus,
+                          color: Color(0xFF136AEC)),
+                      filled: true,
+                      fillColor: const Color(0xFFF6F7F8),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide:
+                              const BorderSide(color: Color(0xFFE0E6F2))),
+                      enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide:
+                              const BorderSide(color: Color(0xFFE0E6F2))),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Route selector dropdown
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Select Route',
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF0D131B))),
+                  const SizedBox(height: 8),
+                  if (_loadingRoutes)
+                    const Center(child: CircularProgressIndicator())
+                  else if (_loadError != null)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red.shade200)),
+                      child: Row(
+                        children: [
+                          Icon(Icons.error_outline, color: Colors.red.shade600),
+                          const SizedBox(width: 8),
+                          Expanded(
+                              child: Text(_loadError!,
+                                  style:
+                                      TextStyle(color: Colors.red.shade700))),
+                          TextButton(
+                              onPressed: _loadRoutes,
+                              child: const Text('Retry')),
+                        ],
+                      ),
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF6F7F8),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFE0E6F2)),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          isExpanded: true,
+                          value: _selectedRoute?['id'],
+                          hint: const Text('Choose a route'),
+                          items: _routes.map((route) {
+                            return DropdownMenuItem<String>(
+                              value: route['id'] as String,
+                              child: Text(
+                                'Route ${route['routeNumber']} — ${route['from']} to ${route['to']}',
+                                style: const TextStyle(fontSize: 14),
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: (id) {
+                            setState(() {
+                              _selectedRoute = _routes
+                                  .firstWhere((r) => r['id'] == id);
+                            });
+                          },
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),
 
-            // Select Route Section
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Select Route',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF0D131B),
-                    ),
-                  ),
-                  SizedBox(height: 12),
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-                    decoration: BoxDecoration(
-                      color: Color(0xFFF6F7F8),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Color(0xFFE0E6F2)),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.route, color: Color(0xFF136AEC)),
-                            SizedBox(width: 12),
-                            Text(
-                              _selectedRouteName,
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF0D131B),
-                              ),
-                            ),
-                          ],
-                        ),
-                        Icon(Icons.arrow_forward_ios, color: Color(0xFF999CA6), size: 16),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
 
-            SizedBox(height: 20),
-
-            // Route Preview Section
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Route Preview',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF0D131B),
-                    ),
-                  ),
-                  SizedBox(height: 12),
-                  Container(
-                    height: 200,
-                    decoration: BoxDecoration(
-                      color: Color(0xFFF0F5FF),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Color(0xFFE0E6F2)),
-                    ),
-                    child: Stack(
-                      children: [
-                        Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.map_outlined, size: 48, color: Color(0xFF136AEC).withValues(alpha: 0.5)),
-                              SizedBox(height: 8),
-                              Text(
-                                'Route Preview Map',
-                                style: TextStyle(
-                                  color: Color(0xFF4C6B9A),
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Positioned(
-                          bottom: 12,
-                          left: 12,
-                          child: Container(
-                            padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(4),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.1),
-                                  blurRadius: 4,
-                                )
-                              ],
-                            ),
-                            child: Text(
-                              'LIVE TRAFFIC READY',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.green,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            SizedBox(height: 20),
+            const SizedBox(height: 20),
 
             // System Ready Section
             Padding(

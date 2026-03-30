@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
 import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
 import 'screens/location_permission_screen.dart';
@@ -26,11 +28,14 @@ import 'screens/map_screen.dart';
 import 'screens/simple_map_test_screen.dart';
 import 'screens/basic_location_screen.dart';
 import 'services/api_service.dart';
+import 'services/notification_service.dart';
+import 'services/geofencing_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   try {
+    // Initialize Firebase
     await Firebase.initializeApp(
       options: const FirebaseOptions(
         apiKey: 'AIzaSyCAQJ1aUoltX6D1uys_kb44uT835prFpig',
@@ -41,12 +46,67 @@ void main() async {
       ),
     );
     debugPrint('✅ Firebase initialized successfully');
+    
+    // Initialize core services
+    await _initializeServices();
+    
   } catch (e) {
     debugPrint('⚠️ Firebase initialization warning: $e');
     // App will fall back to backend authentication
   }
   
   runApp(const TransitLiveApp());
+}
+
+/// Initialize all core services
+Future<void> _initializeServices() async {
+  try {
+    // Initialize notification service (skip on web — uses native platform APIs)
+    if (!kIsWeb) {
+      final notificationService = NotificationService();
+      await notificationService.initialize();
+      debugPrint('✅ Notification service initialized');
+    }
+
+    // Initialize geofencing service (skip on web — requires native GPS)
+    if (!kIsWeb) {
+      final geofencingService = GeofencingService();
+      await geofencingService.initialize();
+      debugPrint('✅ Geofencing service initialized');
+    }
+
+    // Setup token refresh mechanism
+    _setupTokenRefresh();
+
+  } catch (e) {
+    debugPrint('⚠️ Service initialization error: $e');
+    // Continue with app initialization even if some services fail
+  }
+}
+
+/// Setup automatic token refresh
+void _setupTokenRefresh() {
+  // Check and refresh token every 30 minutes
+  Timer.periodic(const Duration(minutes: 30), (timer) async {
+    try {
+      final apiService = ApiService();
+      final token = await apiService.getStoredToken();
+      
+      if (token != null) {
+        // Test token validity
+        try {
+          await apiService.checkBackendHealth();
+          debugPrint('🔄 Token is still valid');
+        } catch (e) {
+          // Token might be expired, attempt to refresh or logout
+          debugPrint('🔄 Token validation failed, may need refresh: $e');
+          // In a production app, implement token refresh logic here
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ Token refresh check error: $e');
+    }
+  });
 }
 
 class TransitLiveApp extends StatelessWidget {
@@ -64,6 +124,7 @@ class TransitLiveApp extends StatelessWidget {
       ),
       home: const AuthGuard(),
       routes: {
+        '/welcome': (context) => const WelcomeScreen(),
         '/auth': (context) => const AuthGuard(),
         '/login': (context) => LoginScreen(),
         '/signup': (context) => SignUpScreen(),
@@ -102,7 +163,6 @@ class AuthGuard extends StatefulWidget {
 class _AuthGuardState extends State<AuthGuard> {
   bool _isLoading = true;
   bool _isLoggedIn = false;
-  String? _role;
 
   @override
   void initState() {
@@ -114,22 +174,10 @@ class _AuthGuardState extends State<AuthGuard> {
     try {
       final apiService = ApiService();
       final token = await apiService.getStoredToken();
-      
-      if (token != null) {
-        // Test if token is still valid by checking backend health
-        final health = await apiService.checkBackendHealth();
-        final role = await apiService.getStoredRole();
-        setState(() {
-          _isLoggedIn = health['status'] == 'success';
-          _role = role;
-          _isLoading = false;
-        });
-      } else {
-        setState(() {
-          _isLoggedIn = false;
-          _isLoading = false;
-        });
-      }
+      setState(() {
+        _isLoggedIn = token != null;
+        _isLoading = false;
+      });
     } catch (e) {
       setState(() {
         _isLoggedIn = false;
@@ -156,9 +204,6 @@ class _AuthGuardState extends State<AuthGuard> {
     }
 
     if (_isLoggedIn) {
-      if (_role == 'driver') {
-        return const TripInitializationScreen();
-      }
       return const MainNavigationScreen();
     } else {
       return const WelcomeScreen();

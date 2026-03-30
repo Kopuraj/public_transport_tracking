@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/api_service.dart';
 
 class LocationPermissionScreen extends StatelessWidget {
   const LocationPermissionScreen({super.key});
@@ -148,10 +149,14 @@ class LocationPermissionScreen extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Location permission granted')),
-                    );
+                  onPressed: () async {
+                    final role = await ApiService().getStoredRole();
+                    if (!context.mounted) return;
+                    if (role == 'driver') {
+                      Navigator.of(context).pushNamedAndRemoveUntil('/trip-initialization', (route) => false);
+                    } else {
+                      Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
+                    }
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Color(0xFF0066FF),
@@ -178,10 +183,14 @@ class LocationPermissionScreen extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Enter location manually')),
-                    );
+                  onPressed: () async {
+                    final role = await ApiService().getStoredRole();
+                    if (!context.mounted) return;
+                    if (role == 'driver') {
+                      Navigator.of(context).pushNamedAndRemoveUntil('/trip-initialization', (route) => false);
+                    } else {
+                      Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
+                    }
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Color(0xFFE8EAED),

@@ -633,7 +633,93 @@ app.post('/api/trips/:tripId/end', verifyToken, async (req, res) => {
 });
 
 // ============================================
-// 4. CROWD INTELLIGENCE ENDPOINTS
+// 4. TRIP CANCELLATION ENDPOINT (ADMIN ONLY)
+// ============================================
+
+app.post('/api/trips/:tripId/cancel', verifyToken, async (req, res) => {
+  try {
+    const tripId = req.params.tripId;
+    const userId = req.user.uid;
+    const { reason } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Cancellation reason is required' 
+      });
+    }
+
+    // Get user role to verify admin permission
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userRole = userDoc.data()?.role;
+
+    if (userRole !== 'admin') {
+      return res.status(403).json({ 
+        success: false, 
+        error: 'Only admins can cancel trips' 
+      });
+    }
+
+    const trip = await db.collection('liveTrips').doc(tripId).get();
+    if (!trip.exists) {
+      return res.status(404).json({ success: false, error: 'Trip not found' });
+    }
+
+    const tripData = trip.data();
+
+    // Cancel trip
+    await db.collection('liveTrips').doc(tripId).update({
+      status: 'cancelled',
+      cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+      cancelledBy: userId,
+      cancellationReason: reason
+    });
+
+    // Archive cancelled trip for analytics
+    await db.collection('completedTrips').add({
+      ...tripData,
+      tripId: tripId,
+      status: 'cancelled',
+      cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+      cancelledBy: userId,
+      cancellationReason: reason
+    });
+
+    // Emit trip cancelled event to notify passengers
+    io.emit('trip-cancelled', {
+      tripId,
+      reason,
+      cancelledAt: new Date(),
+      route: tripData.routeId,
+      vehicleId: tripData.vehicleId
+    });
+
+    // Send push notifications to affected passengers
+    // This would integrate with FCM (Firebase Cloud Messaging)
+    io.emit('emergency-notification', {
+      title: 'Trip Cancelled',
+      message: `Trip ${tripData.routeId} has been cancelled due to ${reason}`,
+      tripId,
+      type: 'trip_cancellation'
+    });
+
+    console.log(`❌ Trip cancelled by admin: ${tripId}, reason: ${reason}`);
+
+    res.json({ 
+      success: true, 
+      message: 'Trip cancelled successfully',
+      reason: reason,
+      cancelledAt: new Date()
+    });
+
+  } catch (error) {
+    console.error('Trip cancellation error:', error);
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================
+// 5. CROWD INTELLIGENCE ENDPOINTS
 // ============================================
 
 app.post('/api/reports/crowd', verifyToken, async (req, res) => {
@@ -1210,8 +1296,126 @@ app.use((req, res) => {
   });
 });
 
+// ============================================
+// SEED INITIAL ROUTES (runs once on startup)
+// ============================================
+
+async function seedRoutes() {
+  try {
+    const existing = await db.collection('routes').limit(1).get();
+    if (!existing.empty) {
+      console.log('✅ Routes already seeded, skipping.');
+      return;
+    }
+
+    const routes = [
+      {
+        routeNumber: '502',
+        from: 'Galle',
+        to: 'Hapugala',
+        departureTime: '06:00 AM',
+        arrivalTime: '06:45 AM',
+        stops: [
+          { name: 'Galle Fort', lat: 6.0269, lng: 80.2168 },
+          { name: 'Karapitiya Junction', lat: 6.0387, lng: 80.2134 },
+          { name: 'Wakwella Road', lat: 6.0465, lng: 80.2098 },
+          { name: 'Boossa', lat: 6.0512, lng: 80.2056 },
+          { name: 'Hapugala', lat: 6.0580, lng: 80.2012 },
+        ],
+        distance: '28 km',
+        fare: 'Rs. 45',
+        frequency: 'Every 15 mins',
+        active: true,
+      },
+      {
+        routeNumber: '503',
+        from: 'Galle',
+        to: 'Matara',
+        departureTime: '07:00 AM',
+        arrivalTime: '08:30 AM',
+        stops: [
+          { name: 'Galle Bus Stand', lat: 6.0329, lng: 80.2168 },
+          { name: 'Unawatuna', lat: 6.0099, lng: 80.2467 },
+          { name: 'Koggala', lat: 5.9936, lng: 80.3003 },
+          { name: 'Ahangama', lat: 5.9768, lng: 80.3618 },
+          { name: 'Weligama', lat: 5.9735, lng: 80.4290 },
+          { name: 'Matara', lat: 5.9549, lng: 80.5550 },
+        ],
+        distance: '42 km',
+        fare: 'Rs. 65',
+        frequency: 'Every 20 mins',
+        active: true,
+      },
+      {
+        routeNumber: '504',
+        from: 'Galle',
+        to: 'Colombo',
+        departureTime: '08:00 AM',
+        arrivalTime: '11:00 AM',
+        stops: [
+          { name: 'Galle Bus Stand', lat: 6.0329, lng: 80.2168 },
+          { name: 'Hikkaduwa', lat: 6.1399, lng: 80.1054 },
+          { name: 'Ambalangoda', lat: 6.2345, lng: 80.0546 },
+          { name: 'Aluthgama', lat: 6.4267, lng: 79.9964 },
+          { name: 'Kalutara', lat: 6.5854, lng: 79.9607 },
+          { name: 'Panadura', lat: 6.7133, lng: 79.9042 },
+          { name: 'Colombo Fort', lat: 6.9271, lng: 79.8612 },
+        ],
+        distance: '118 km',
+        fare: 'Rs. 150',
+        frequency: 'Every 30 mins',
+        active: true,
+      },
+      {
+        routeNumber: '505',
+        from: 'Galle',
+        to: 'Unawatuna',
+        departureTime: '06:30 AM',
+        arrivalTime: '07:00 AM',
+        stops: [
+          { name: 'Galle Fort', lat: 6.0269, lng: 80.2168 },
+          { name: 'Light House', lat: 6.0180, lng: 80.2290 },
+          { name: 'Unawatuna Beach', lat: 6.0099, lng: 80.2467 },
+        ],
+        distance: '6 km',
+        fare: 'Rs. 20',
+        frequency: 'Every 10 mins',
+        active: true,
+      },
+      {
+        routeNumber: '506',
+        from: 'Galle',
+        to: 'Kandy',
+        departureTime: '05:30 AM',
+        arrivalTime: '09:30 AM',
+        stops: [
+          { name: 'Galle Bus Stand', lat: 6.0329, lng: 80.2168 },
+          { name: 'Elpitiya', lat: 6.2868, lng: 80.1684 },
+          { name: 'Ratnapura', lat: 6.6828, lng: 80.3992 },
+          { name: 'Avissawella', lat: 6.9526, lng: 80.2119 },
+          { name: 'Kandy City', lat: 7.2906, lng: 80.6337 },
+        ],
+        distance: '155 km',
+        fare: 'Rs. 200',
+        frequency: 'Every 60 mins',
+        active: true,
+      },
+    ];
+
+    const batch = db.batch();
+    for (const route of routes) {
+      const ref = db.collection('routes').doc();
+      batch.set(ref, { ...route, createdAt: new Date() });
+    }
+    await batch.commit();
+    console.log(`✅ Seeded ${routes.length} routes into Firestore.`);
+  } catch (err) {
+    console.error('❌ Route seeding failed:', err.message);
+  }
+}
+
 // Start server
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`
 ╔════════════════════════════════════════╗
 ║   🚀 TransitLive Pro Backend Started   ║
@@ -1222,6 +1426,7 @@ server.listen(PORT, () => {
 ║  Mode: ${process.env.NODE_ENV || 'development'}                       ║
 ╚════════════════════════════════════════╝
   `);
+  await seedRoutes();
 });
 
 module.exports = { app, io };

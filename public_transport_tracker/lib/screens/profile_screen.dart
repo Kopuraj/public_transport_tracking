@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../services/api_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -49,18 +50,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           TextButton(
             onPressed: () async {
-              if (!mounted) return;
+              Navigator.pop(dialogContext);
               try {
-                await _authService.logout();
-                if (mounted && dialogContext.mounted) {
-                  Navigator.of(dialogContext).pushReplacementNamed('/welcome');
-                }
-              } catch (e) {
-                if (mounted && dialogContext.mounted) {
-                  ScaffoldMessenger.of(dialogContext).showSnackBar(
-                    SnackBar(content: Text('Logout failed: $e')),
-                  );
-                }
+                await ApiService().logout();
+              } catch (_) {}
+              if (mounted) {
+                Navigator.of(context).pushNamedAndRemoveUntil('/welcome', (route) => false);
               }
             },
             child: Text('Logout', style: TextStyle(color: Colors.red)),

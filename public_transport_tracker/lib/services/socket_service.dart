@@ -70,6 +70,10 @@ class SocketService {
     });
   }
 
+  void emit(String event, dynamic data) {
+    _socket?.emit(event, data);
+  }
+
   void disconnect() {
     _socket?.disconnect();
     _socket = null;
