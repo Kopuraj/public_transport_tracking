@@ -16,7 +16,7 @@ class SimpleMapTestScreen extends StatelessWidget {
         backgroundColor: Colors.blue,
         foregroundColor: Colors.white,
       ),
-      body: Container(
+      body: SizedBox(
         width: double.infinity,
         height: double.infinity,
         child: FlutterMap(
@@ -72,8 +72,8 @@ class SimpleMapTestScreen extends StatelessWidget {
                 SnackBar(content: Text('Using CartoDB tiles - should work on web!')),
               );
             },
-            child: Text('1', style: TextStyle(color: Colors.white)),
             backgroundColor: Colors.blue,
+            child: Text('1', style: TextStyle(color: Colors.white)),
           ),
           SizedBox(height: 8),
           FloatingActionButton(
@@ -104,8 +104,8 @@ class SimpleMapTestScreen extends StatelessWidget {
                 ),
               );
             },
-            child: Icon(Icons.info),
             backgroundColor: Colors.green,
+            child: Icon(Icons.info),
           ),
         ],
       ),

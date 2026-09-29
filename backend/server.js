@@ -7,10 +7,12 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
+const os = require('os');
 const socketIO = require('socket.io');
 const admin = require('firebase-admin');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
+const { findMatchingBuses, normalizeRoute } = require('./route-matcher');
 
 // ============================================
 // FIREBASE INITIALIZATION
@@ -23,6 +25,20 @@ admin.initializeApp({
 
 const db = admin.firestore();
 const auth = admin.auth();
+
+function getLocalIpAddress() {
+  const interfaces = os.networkInterfaces();
+
+  for (const interfaceName of Object.keys(interfaces)) {
+    for (const details of interfaces[interfaceName] || []) {
+      if (details.family === 'IPv4' && !details.internal) {
+        return details.address;
+      }
+    }
+  }
+
+  return 'localhost';
+}
 
 // ============================================
 // EXPRESS & SOCKET.IO SETUP
@@ -366,7 +382,7 @@ app.get('/api/routes', async (req, res) => {
     const routes = await db.collection('routes').get();
     const routesList = routes.docs.map(doc => ({
       id: doc.id,
-      ...doc.data()
+      ...normalizeRoute(doc.data())
     }));
 
     res.json({ success: true, routes: routesList });
@@ -389,7 +405,7 @@ app.get('/api/routes/:routeId', async (req, res) => {
       success: true, 
       route: {
         id: routeId,
-        ...route.data()
+        ...normalizeRoute(route.data())
       }
     });
   } catch (error) {
@@ -413,6 +429,74 @@ app.get('/api/routes/:routeId/active-trips', async (req, res) => {
     res.json({ success: true, trips: tripsList });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/routes/find-buses', async (req, res) => {
+  try {
+    const {
+      passengerLat,
+      passengerLng,
+      destinationLat,
+      destinationLng,
+    } = req.body;
+
+    const coordinates = [passengerLat, passengerLng, destinationLat, destinationLng];
+    const allNumbers = coordinates.every((value) => Number.isFinite(Number(value)));
+
+    if (!allNumbers) {
+      return res.status(400).json({
+        success: false,
+        error: 'passengerLat, passengerLng, destinationLat, destinationLng must be valid numbers',
+      });
+    }
+
+    const activeTripsSnapshot = await db.collection('liveTrips')
+      .where('status', '==', 'active')
+      .get();
+
+    const activeTrips = activeTripsSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    if (activeTrips.length === 0) {
+      return res.json({ success: true, matches: [], count: 0 });
+    }
+
+    const routeIds = [...new Set(activeTrips
+      .map((trip) => trip.routeId)
+      .filter((routeId) => typeof routeId === 'string' && routeId.trim().length > 0))];
+
+    const routeDocs = await Promise.all(
+      routeIds.map((routeId) => db.collection('routes').doc(routeId).get())
+    );
+
+    const routesById = new Map();
+    routeDocs.forEach((doc) => {
+      if (doc.exists) {
+        routesById.set(doc.id, doc.data());
+      }
+    });
+
+    const matches = findMatchingBuses({
+      passengerLat: Number(passengerLat),
+      passengerLng: Number(passengerLng),
+      destinationLat: Number(destinationLat),
+      destinationLng: Number(destinationLng),
+      activeTrips,
+      routesById,
+      maxStopDistanceKm: 0.5,
+    });
+
+    return res.json({
+      success: true,
+      matches,
+      count: matches.length,
+    });
+  } catch (error) {
+    console.error('Find buses error:', error);
+    return res.status(400).json({ success: false, error: error.message });
   }
 });
 
@@ -1415,13 +1499,14 @@ async function seedRoutes() {
 }
 
 // Start server
-server.listen(PORT, async () => {
+server.listen(PORT, '0.0.0.0', async () => {
+  const localIpAddress = getLocalIpAddress();
   console.log(`
 ╔════════════════════════════════════════╗
 ║   🚀 TransitLive Pro Backend Started   ║
 ╠════════════════════════════════════════╣
-║  Server: http://localhost:${PORT}              ║
-║  WebSocket: ws://localhost:${PORT}             ║
+║  Server: http://${localIpAddress}:${PORT}              ║
+║  WebSocket: ws://${localIpAddress}:${PORT}             ║
 ║  Firebase: Connected & Ready            ║
 ║  Mode: ${process.env.NODE_ENV || 'development'}                       ║
 ╚════════════════════════════════════════╝

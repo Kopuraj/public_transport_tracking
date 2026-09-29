@@ -39,7 +39,7 @@ class _DriverTripDashboardScreenState extends State<DriverTripDashboardScreen> {
       });
       _startTracking();
     } else {
-      _startSimulatedTrip();
+      _statusText = 'TRIP NOT INITIALIZED';
     }
   }
 
@@ -47,16 +47,6 @@ class _DriverTripDashboardScreenState extends State<DriverTripDashboardScreen> {
   void dispose() {
     _stopTracking();
     super.dispose();
-  }
-
-  void _startSimulatedTrip() {
-    // This would normally come from ApiService().initializeTrip
-    setState(() {
-      _currentTripId = "TRIP_${DateTime.now().millisecondsSinceEpoch}";
-      _isTracking = true;
-      _statusText = 'ONLINE';
-    });
-    _startTracking();
   }
 
   void _startTracking() async {
@@ -141,6 +131,67 @@ class _DriverTripDashboardScreenState extends State<DriverTripDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_currentTripId == null) {
+      return Scaffold(
+        backgroundColor: Colors.white,
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          elevation: 1,
+          leading: GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: const Icon(Icons.arrow_back, color: Color(0xFF0D131B)),
+          ),
+          title: const Text(
+            'Trip Dashboard',
+            style: TextStyle(
+              color: Color(0xFF0D131B),
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.warning_amber_rounded,
+                    size: 56, color: Colors.orange),
+                const SizedBox(height: 12),
+                const Text(
+                  'No active trip found',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF0D131B),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Start a trip from Trip Initialization so passenger tracking can receive real-time updates.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Color(0xFF666B77)),
+                ),
+                const SizedBox(height: 18),
+                ElevatedButton(
+                  onPressed: () => Navigator.pushReplacementNamed(
+                    context,
+                    '/trip-initialization',
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF136AEC),
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Go To Trip Initialization'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     double occupancyPercentage = (_passengerCount / _maxCapacity) * 100;
     Color crowdingColor = occupancyPercentage < 50
         ? Colors.green
@@ -244,7 +295,7 @@ class _DriverTripDashboardScreenState extends State<DriverTripDashboardScreen> {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(8),
                     child: LinearProgressIndicator(
-                      value: 0.45,
+                      value: _currentCompletion,
                       minHeight: 6,
                       backgroundColor: Color(0xFFE0E6F2),
                       valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF136AEC)),
@@ -252,7 +303,7 @@ class _DriverTripDashboardScreenState extends State<DriverTripDashboardScreen> {
                   ),
                   SizedBox(height: 6),
                   Text(
-                    '45% of route completed',
+                    '${(_currentCompletion * 100).toStringAsFixed(0)}% of route completed',
                     style: TextStyle(
                       fontSize: 10,
                       color: Color(0xFF999CA6),

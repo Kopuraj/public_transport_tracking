@@ -5,6 +5,7 @@ import 'dart:async';
 import '../services/socket_service.dart';
 import '../services/map_service.dart';
 import '../services/api_service.dart';
+import 'find_bus_screen.dart';
 
 class TripTrackingScreen extends StatefulWidget {
   const TripTrackingScreen({super.key});
@@ -26,21 +27,43 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
   String _etaText = '--';
   String _occupancyText = 'Unknown';
   bool _isMapReady = false;
+  final bool _useLegacyRoutePicker = false;
 
   // Loading states
-  bool _loadingRoutes = true;
+  bool _loadingRoutes = false;
   bool _loadingTrips = false;
   List<Map<String, dynamic>> _routes = [];
   List<Map<String, dynamic>> _activeTrips = [];
 
   StreamSubscription? _gpsSubscription;
   StreamSubscription? _crowdSubscription;
+  StreamSubscription? _tripStartedSubscription;
 
   @override
   void initState() {
     super.initState();
-    _loadRoutes();
     SocketService().connect();
+
+    _tripStartedSubscription = SocketService().tripStarted.listen((data) {
+      if (!mounted || _selectedRoute == null) return;
+      if (data['routeId'] == _selectedRoute!['id']) {
+        _selectRoute(_selectedRoute!);
+      }
+    });
+  }
+
+  void _applyMatchedBus(Map<String, dynamic> match) {
+    final route = Map<String, dynamic>.from(match['route'] ?? {});
+    final trip = Map<String, dynamic>.from(match['trip'] ?? {});
+
+    route['id'] = route['id'] ?? match['routeId'];
+    trip['id'] = trip['id'] ?? match['tripId'];
+
+    setState(() {
+      _selectedRoute = route;
+    });
+
+    _selectTrip(trip);
   }
 
   @override
@@ -57,6 +80,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
   void dispose() {
     _gpsSubscription?.cancel();
     _crowdSubscription?.cancel();
+    _tripStartedSubscription?.cancel();
     super.dispose();
   }
 
@@ -108,6 +132,17 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     setState(() => _selectedTrip = trip);
 
     final tripId = trip['id'] ?? '';
+
+    final currentLocation = trip['currentLocation'];
+    if (currentLocation is Map &&
+        currentLocation['latitude'] != null &&
+        currentLocation['longitude'] != null) {
+      _busLocation = LatLng(
+        (currentLocation['latitude'] as num).toDouble(),
+        (currentLocation['longitude'] as num).toDouble(),
+      );
+    }
+
     SocketService().emit('subscribe-trip', tripId);
 
     _gpsSubscription = SocketService().gpsUpdates.listen((data) {
@@ -130,6 +165,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
 
     _crowdSubscription = SocketService().crowdUpdates.listen((data) {
       if (!mounted) return;
+      if (data['tripId'] != tripId) return;
       setState(() {
         _occupancyText =
             data['crowdLevel']?.toString().toUpperCase() ?? 'Unknown';
@@ -146,7 +182,7 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
         elevation: 1,
         title: Text(
           _selectedRoute == null
-              ? 'Track a Bus'
+              ? 'Find a Bus'
               : '${_selectedRoute!['from']} → ${_selectedRoute!['to']}',
           style: const TextStyle(
               color: Color(0xFF0D131B),
@@ -168,13 +204,16 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
         ],
       ),
       body: _selectedRoute == null
-          ? _buildRoutePicker()
+          ? (_useLegacyRoutePicker
+            ? _buildRoutePicker()
+            : FindBusScreen(onBusSelected: _applyMatchedBus))
           : _selectedTrip == null
               ? _buildTripPicker()
               : _buildLiveTracking(),
     );
   }
 
+  // ignore: unused_element
   // Step 1: Pick a route
   Widget _buildRoutePicker() {
     if (_loadingRoutes) {

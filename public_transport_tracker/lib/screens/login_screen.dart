@@ -337,6 +337,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         'https://lh3.googleusercontent.com/aida-public/AB6AXuBRdgubqNfYEeT6C-MpFUjKZUBJwiChwiugANqVlnXntNllzAKtyDrxVyg5UaZ9uuZVsOf9E4PkJ2JBXHkTt30Z8fhSM_iQan6LPpXoI7IUlLaCWj8ml-cdzupVkyqdrOFAvkRd5T3SRnGFtQsDZKU87SurXNrlEU8exKIAyYZf2jn592kRRL5l-vwi6p3uMh8XDn_aXFXpmK_Xxr5_ADjap0YY35H6ICo4PwYS29ovr1fhOIa2PmDOrxi0a2KmK43kFTnwF8kzOWrD',
                         width: 20,
                         height: 20,
+                        errorBuilder: (context, error, stackTrace) => const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: Icon(Icons.account_circle_outlined, size: 20),
+                        ),
                       ),
                       label: Text('Google'),
                       style: OutlinedButton.styleFrom(

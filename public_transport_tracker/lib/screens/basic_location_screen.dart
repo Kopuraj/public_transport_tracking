@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:location/location.dart';
-import 'package:geolocator/geolocator.dart';
 
 class BasicLocationScreen extends StatefulWidget {
   const BasicLocationScreen({super.key});

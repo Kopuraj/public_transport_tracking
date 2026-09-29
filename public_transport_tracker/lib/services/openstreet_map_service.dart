@@ -12,7 +12,7 @@ class MapService {
 
   Location location = Location();
   MapController? _mapController;
-  List<Marker> _markers = [];
+  final List<Marker> _markers = [];
   Position? _currentPosition;
   
   // Default center (Galle, Sri Lanka)

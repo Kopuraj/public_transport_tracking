@@ -5,8 +5,9 @@ import '../services/api_service.dart';
 import 'mock_auth_service.dart';
 
 class AuthService {
-  final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  // Backend login must remain usable when optional native Firebase setup fails.
+  FirebaseAuth get _firebaseAuth => FirebaseAuth.instance;
+  FirebaseFirestore get _firestore => FirebaseFirestore.instance;
   final MockAuthService _mockAuth = MockAuthService();
   final ApiService _apiService = ApiService();
   

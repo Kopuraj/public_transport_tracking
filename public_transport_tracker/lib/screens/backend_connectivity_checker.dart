@@ -30,34 +30,34 @@ class _BackendConnectivityCheckerState extends State<BackendConnectivityChecker>
         testFunction: _testFirebaseAuth,
       ),
       ConnectivityTest(
-        name: 'Local Backend (localhost:5000)',
-        description: 'Check local Node.js/Python backend',
-        endpoint: 'http://localhost:5000',
-        testFunction: () => _testBackend('http://localhost:5000'),
+        name: 'Local Backend (192.168.1.130:5000)',
+        description: 'Check local Node.js backend on your PC',
+        endpoint: 'http://192.168.1.130:5000',
+        testFunction: () => _testBackend('http://192.168.1.130:5000'),
       ),
       ConnectivityTest(
-        name: 'Local Backend (127.0.0.1:8000)',
-        description: 'Check alternative local backend',
-        endpoint: 'http://127.0.0.1:8000',
-        testFunction: () => _testBackend('http://127.0.0.1:8000'),
+        name: 'Local Backend (192.168.1.130:5000 /api/health)',
+        description: 'Check the health endpoint on your PC backend',
+        endpoint: 'http://192.168.1.130:5000/api/health',
+        testFunction: () => _testHealthEndpoint('http://192.168.1.130:5000/api/health'),
       ),
       ConnectivityTest(
         name: 'REST API Health Check',
         description: 'Check /api/health endpoint',
-        endpoint: 'http://localhost:5000/api/health',
-        testFunction: () => _testHealthEndpoint('http://localhost:5000/api/health'),
+        endpoint: 'http://192.168.1.130:5000/api/health',
+        testFunction: () => _testHealthEndpoint('http://192.168.1.130:5000/api/health'),
       ),
       ConnectivityTest(
         name: 'Database Connection',
         description: 'Check database status endpoint',
-        endpoint: 'http://localhost:5000/api/status',
-        testFunction: () => _testHealthEndpoint('http://localhost:5000/api/status'),
+        endpoint: 'http://192.168.1.130:5000/api/status',
+        testFunction: () => _testHealthEndpoint('http://192.168.1.130:5000/api/status'),
       ),
       ConnectivityTest(
         name: 'User Routes Endpoint',
         description: 'Check /api/users endpoint',
-        endpoint: 'http://localhost:5000/api/users',
-        testFunction: () => _testEndpoint('http://localhost:5000/api/users'),
+        endpoint: 'http://192.168.1.130:5000/api/users',
+        testFunction: () => _testEndpoint('http://192.168.1.130:5000/api/users'),
       ),
     ]);
   }
@@ -311,7 +311,7 @@ class _BackendConnectivityCheckerState extends State<BackendConnectivityChecker>
                   )
                 else
                   Icon(
-                    result!.success ? Icons.check_circle : Icons.cancel,
+                    result.success ? Icons.check_circle : Icons.cancel,
                     color: result.success ? Colors.green : Colors.red,
                     size: 24,
                   ),
@@ -348,7 +348,7 @@ class _BackendConnectivityCheckerState extends State<BackendConnectivityChecker>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (result!.statusCode != 0)
+                    if (result.statusCode != 0)
                       Text(
                         'Status Code: ${result.statusCode}',
                         style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),

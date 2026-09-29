@@ -469,6 +469,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
                         'https://lh3.googleusercontent.com/aida-public/AB6AXuDxUnCktpJTKDjLDbpJPkYmsfzQT9o6YnhVfZqjNir84kBcO4puimeaBm9gGVJcag0vQ5gDdAtyGKEGk-17Cu5xlECOYok7O6UyVZhOO8fCjs44AMPooquek4rSygtvlevrepQcKpH5kKu43ChYPz9_KTY-aRgfCqoi-QnQ5yhdtX0i6T888GKumMssxpGsVARdPqM-wPVd14vrdda6pVlAb__PqvQwCr0asljdQXm4UpOSB5yCJyawvDFz6Gs0MgaemoXTCtHRscMl',
                         width: 20,
                         height: 20,
+                        errorBuilder: (context, error, stackTrace) => const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: Icon(Icons.account_circle_outlined, size: 20),
+                        ),
                       ),
                       label: Text('Google'),
                       style: OutlinedButton.styleFrom(

@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "TransitLive - Android emulator (local backend)",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "${workspaceFolder}/public_transport_tracker",
+      "program": "${workspaceFolder}/public_transport_tracker/lib/main.dart",
+      "toolArgs": ["--dart-define=BACKEND_URL=http://10.0.2.2:5000"]
+    }
+  ]
+}

@@ -4,10 +4,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 
 class ApiConfig {
-  static const String baseUrl = 'http://192.168.1.130:5000/api';
-  static const String wsUrl = 'ws://192.168.1.130:5000';
-  // For local testing:
-  // static const String baseUrl = 'http://localhost:5000/api';
+  // Android emulators reach the host computer through 10.0.2.2.
+  // Override for a physical phone or deployment using --dart-define.
+  static const String serverUrl = String.fromEnvironment(
+    'BACKEND_URL',
+    defaultValue: 'http://10.0.2.2:5000',
+  );
+  static String get wsUrl => serverUrl.replaceFirst(RegExp(r'/+$'), '');
+  static String get baseUrl => '$wsUrl/api';
 }
 
 class ApiService {
@@ -38,6 +42,7 @@ class ApiService {
     await prefs.remove('auth_token');
   }
 
+  // ignore: unused_element
   Future<String?> _getUserId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('user_id');
@@ -224,6 +229,37 @@ class ApiService {
     } catch (e) {
       debugPrint('❌ Get Active Trips Error: $e');
       throw Exception('Failed to fetch active trips: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> findBuses({
+    required double passengerLat,
+    required double passengerLng,
+    required double destinationLat,
+    required double destinationLng,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/routes/find-buses'),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'passengerLat': passengerLat,
+          'passengerLng': passengerLng,
+          'destinationLat': destinationLat,
+          'destinationLng': destinationLng,
+        }),
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Failed to find matching buses');
+      }
+    } catch (e) {
+      debugPrint('❌ Find Buses Error: $e');
+      throw Exception('Failed to find buses: $e');
     }
   }
 

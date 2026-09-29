@@ -4,9 +4,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 
 class ApiConfig {
-  static const String baseUrl = 'http://localhost:5000/api';
-  // For real device testing, use your machine IP:
-  // static const String baseUrl = 'http://192.168.x.x:5000/api';
+  static const String baseUrl = 'http://192.168.1.130:5000/api';
+  // For real device testing, use your machine IP.
 }
 
 class ApiService {

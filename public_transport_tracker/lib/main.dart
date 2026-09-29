@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:firebase_core/firebase_core.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
@@ -24,9 +23,6 @@ import 'screens/trip_tracking_screen.dart';
 import 'screens/trip_planner_screen.dart';
 import 'screens/tickets_screen.dart';
 import 'screens/profile_screen.dart';
-import 'screens/map_screen.dart';
-import 'screens/simple_map_test_screen.dart';
-import 'screens/basic_location_screen.dart';
 import 'services/api_service.dart';
 import 'services/notification_service.dart';
 import 'services/geofencing_service.dart';
@@ -48,7 +44,9 @@ void main() async {
     debugPrint('✅ Firebase initialized successfully');
     
     // Initialize core services
-    await _initializeServices();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_initializeServices());
+    });
     
   } catch (e) {
     debugPrint('⚠️ Firebase initialization warning: $e');
@@ -163,6 +161,7 @@ class AuthGuard extends StatefulWidget {
 class _AuthGuardState extends State<AuthGuard> {
   bool _isLoading = true;
   bool _isLoggedIn = false;
+  String? _role;
 
   @override
   void initState() {
@@ -174,11 +173,15 @@ class _AuthGuardState extends State<AuthGuard> {
     try {
       final apiService = ApiService();
       final token = await apiService.getStoredToken();
+      final role = await apiService.getStoredRole();
+      if (!mounted) return;
       setState(() {
         _isLoggedIn = token != null;
+        _role = role;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoggedIn = false;
         _isLoading = false;
@@ -204,6 +207,7 @@ class _AuthGuardState extends State<AuthGuard> {
     }
 
     if (_isLoggedIn) {
+      if (_role == 'driver') return const TripInitializationScreen();
       return const MainNavigationScreen();
     } else {
       return const WelcomeScreen();

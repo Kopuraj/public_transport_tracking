@@ -17,7 +17,7 @@ class _MapScreenState extends State<MapScreen> {
   LatLng _currentCenter = MapService.defaultCenter;
   LatLng? _userLocation;
   List<Marker> _markers = [];
-  List<Polyline> _polylines = [];
+  final List<Polyline> _polylines = [];
   
   bool _isLoading = true;
 
