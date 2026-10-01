@@ -1,8 +1,5 @@
 {{flutter_js}}
 {{flutter_build_config}}
 
-_flutter.loader.load({
-  config: {
-    renderer: "html",
-  },
-});
+// Let Flutter choose a renderer supported by the current build.
+_flutter.loader.load();
