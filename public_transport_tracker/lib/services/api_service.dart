@@ -4,23 +4,32 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 
 class ApiConfig {
-  // Android emulators reach the host computer through 10.0.2.2.
-  // Override for a physical phone or deployment using --dart-define.
-  static const String serverUrl = String.fromEnvironment(
+  static const String _configuredServerUrl = String.fromEnvironment(
     'BACKEND_URL',
-    defaultValue: 'http://10.0.2.2:5000',
+    defaultValue: '',
   );
+  // Browsers use the host directly. Android emulators reach it through 10.0.2.2.
+  // A physical phone still needs --dart-define=BACKEND_URL=http://YOUR_PC_IP:5000.
+  static String get serverUrl {
+    if (_configuredServerUrl.isNotEmpty) return _configuredServerUrl;
+    if (kIsWeb) return 'http://localhost:5000';
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return 'http://10.0.2.2:5000';
+    }
+    return 'http://localhost:5000';
+  }
+
   static String get wsUrl => serverUrl.replaceFirst(RegExp(r'/+$'), '');
   static String get baseUrl => '$wsUrl/api';
 }
 
 class ApiService {
   static final ApiService _instance = ApiService._internal();
-  
+
   factory ApiService() {
     return _instance;
   }
-  
+
   ApiService._internal();
 
   // ============================================
@@ -85,17 +94,19 @@ class ApiService {
     String? phone,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/auth/signup'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'email': email,
-          'password': password,
-          'fullName': fullName,
-          'role': role,
-          'phone': phone,
-        }),
-      ).timeout(const Duration(seconds: 15));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/auth/signup'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'email': email,
+              'password': password,
+              'fullName': fullName,
+              'role': role,
+              'phone': phone,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -124,14 +135,13 @@ class ApiService {
     required String password,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/auth/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'email': email,
-          'password': password,
-        }),
-      ).timeout(const Duration(seconds: 15));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/auth/login'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email, 'password': password}),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -159,13 +169,15 @@ class ApiService {
     try {
       final token = await _getToken();
       if (token != null) {
-        await http.post(
-          Uri.parse('${ApiConfig.baseUrl}/auth/logout'),
-          headers: {
-            'Authorization': 'Bearer $token',
-            'Content-Type': 'application/json',
-          },
-        ).timeout(const Duration(seconds: 10));
+        await http
+            .post(
+              Uri.parse('${ApiConfig.baseUrl}/auth/logout'),
+              headers: {
+                'Authorization': 'Bearer $token',
+                'Content-Type': 'application/json',
+              },
+            )
+            .timeout(const Duration(seconds: 10));
       }
     } catch (e) {
       debugPrint('Logout error: $e');
@@ -183,9 +195,9 @@ class ApiService {
 
   Future<Map<String, dynamic>> getAllRoutes() async {
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/routes'),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('${ApiConfig.baseUrl}/routes'))
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -200,9 +212,9 @@ class ApiService {
 
   Future<Map<String, dynamic>> getRoute(String routeId) async {
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/routes/$routeId'),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('${ApiConfig.baseUrl}/routes/$routeId'))
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -217,9 +229,9 @@ class ApiService {
 
   Future<Map<String, dynamic>> getActiveTripsOnRoute(String routeId) async {
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/routes/$routeId/active-trips'),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('${ApiConfig.baseUrl}/routes/$routeId/active-trips'))
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -232,6 +244,14 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getActiveTrips() async {
+    final response = await http
+        .get(Uri.parse('${ApiConfig.baseUrl}/trips/active'))
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode == 200) return jsonDecode(response.body);
+    throw Exception('Failed to fetch active trips');
+  }
+
   Future<Map<String, dynamic>> findBuses({
     required double passengerLat,
     required double passengerLng,
@@ -239,18 +259,18 @@ class ApiService {
     required double destinationLng,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/routes/find-buses'),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'passengerLat': passengerLat,
-          'passengerLng': passengerLng,
-          'destinationLat': destinationLat,
-          'destinationLng': destinationLng,
-        }),
-      ).timeout(const Duration(seconds: 15));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/routes/find-buses'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'passengerLat': passengerLat,
+              'passengerLng': passengerLng,
+              'destinationLat': destinationLat,
+              'destinationLng': destinationLng,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -270,29 +290,37 @@ class ApiService {
   Future<Map<String, dynamic>> initializeTrip({
     required String vehicleId,
     required String routeId,
+    int capacity = 55,
+    String direction = 'outbound',
     String? conductorId,
   }) async {
     try {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/trips/initialize'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
-          'vehicleId': vehicleId,
-          'routeId': routeId,
-          'conductorId': conductorId,
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/trips/initialize'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({
+              'vehicleId': vehicleId,
+              'routeId': routeId,
+              'capacity': capacity,
+              'direction': direction,
+              'conductorId': conductorId,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Trip initialization failed');
+        throw Exception(
+          jsonDecode(response.body)['error'] ?? 'Trip initialization failed',
+        );
       }
     } catch (e) {
       debugPrint('❌ Initialize Trip Error: $e');
@@ -311,19 +339,21 @@ class ApiService {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/trips/$tripId/gps'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
-          'latitude': latitude,
-          'longitude': longitude,
-          'speed': speed ?? 0,
-          'accuracy': accuracy,
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/trips/$tripId/gps'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({
+              'latitude': latitude,
+              'longitude': longitude,
+              'speedMps': speed ?? 0,
+              'accuracy': accuracy,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -336,11 +366,48 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> updateTripOccupancy({
+    required String tripId,
+    required int occupancy,
+  }) async {
+    final token = await _getToken();
+    if (token == null) throw Exception('No authentication token');
+    final response = await http
+        .patch(
+          Uri.parse('${ApiConfig.baseUrl}/trips/$tripId/occupancy'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: jsonEncode({'occupancy': occupancy}),
+        )
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode == 200) return jsonDecode(response.body);
+    throw Exception(
+      jsonDecode(response.body)['error'] ?? 'Occupancy update failed',
+    );
+  }
+
+  Future<Map<String, dynamic>> getMyActiveTrip() async {
+    final token = await _getToken();
+    if (token == null) throw Exception('No authentication token');
+    final response = await http
+        .get(
+          Uri.parse('${ApiConfig.baseUrl}/trips/my-active'),
+          headers: {'Authorization': 'Bearer $token'},
+        )
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode == 200) return jsonDecode(response.body);
+    throw Exception(
+      jsonDecode(response.body)['error'] ?? 'Failed to load active trip',
+    );
+  }
+
   Future<Map<String, dynamic>> getTripDetails(String tripId) async {
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/trips/$tripId'),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('${ApiConfig.baseUrl}/trips/$tripId'))
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -358,13 +425,15 @@ class ApiService {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/trips/$tripId/end'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/trips/$tripId/end'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -377,22 +446,67 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getMyTickets() async {
+    final token = await _getToken();
+    if (token == null) throw Exception('No authentication token');
+    final response = await http
+        .get(
+          Uri.parse('${ApiConfig.baseUrl}/tickets/mine'),
+          headers: {'Authorization': 'Bearer $token'},
+        )
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode == 200) return jsonDecode(response.body);
+    throw Exception(
+      jsonDecode(response.body)['error'] ?? 'Failed to load tickets',
+    );
+  }
+
+  Future<Map<String, dynamic>> createTicket({
+    required String tripId,
+    required int pickupStopIndex,
+    required int dropoffStopIndex,
+    required int passengerCount,
+  }) async {
+    final token = await _getToken();
+    if (token == null) throw Exception('No authentication token');
+    final response = await http
+        .post(
+          Uri.parse('${ApiConfig.baseUrl}/tickets'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: jsonEncode({
+            'tripId': tripId,
+            'pickupStopIndex': pickupStopIndex,
+            'dropoffStopIndex': dropoffStopIndex,
+            'passengerCount': passengerCount,
+          }),
+        )
+        .timeout(const Duration(seconds: 10));
+    final body = jsonDecode(response.body);
+    if (response.statusCode == 201) return body;
+    throw Exception(body['error'] ?? 'Failed to create ticket');
+  }
+
   Future<Map<String, dynamic>> cancelTrip(String tripId, String reason) async {
     try {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/trips/$tripId/cancel'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
-          'reason': reason,
-          'cancelledAt': DateTime.now().toIso8601String(),
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/trips/$tripId/cancel'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({
+              'reason': reason,
+              'cancelledAt': DateTime.now().toIso8601String(),
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -419,26 +533,30 @@ class ApiService {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/reports/crowd'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
-          'tripId': tripId,
-          'crowdLevel': crowdLevel,
-          'userLocation': {
-            'latitude': userLatitude,
-            'longitude': userLongitude,
-          }
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/reports/crowd'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({
+              'tripId': tripId,
+              'crowdLevel': crowdLevel,
+              'userLocation': {
+                'latitude': userLatitude,
+                'longitude': userLongitude,
+              },
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to submit crowd report');
+        throw Exception(
+          jsonDecode(response.body)['error'] ?? 'Failed to submit crowd report',
+        );
       }
     } catch (e) {
       debugPrint('❌ Crowd Report Error: $e');
@@ -448,9 +566,9 @@ class ApiService {
 
   Future<Map<String, dynamic>> getCrowdReports(String tripId) async {
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/trips/$tripId/crowd-reports'),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('${ApiConfig.baseUrl}/trips/$tripId/crowd-reports'))
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -478,22 +596,23 @@ class ApiService {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/alerts/emergency'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
-          'tripId': tripId,
-          'alertType': alertType,
-          'message': message,
-          'location': latitude != null && longitude != null ? {
-            'latitude': latitude,
-            'longitude': longitude,
-          } : null,
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/alerts/emergency'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({
+              'tripId': tripId,
+              'alertType': alertType,
+              'message': message,
+              'location': latitude != null && longitude != null
+                  ? {'latitude': latitude, 'longitude': longitude}
+                  : null,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -506,18 +625,28 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getActiveAlerts() async {
+    final response = await http
+        .get(Uri.parse('${ApiConfig.baseUrl}/alerts/active'))
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode == 200) return jsonDecode(response.body);
+    throw Exception('Failed to load active alerts');
+  }
+
   Future<Map<String, dynamic>> resolveAlert(String alertId) async {
     try {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/alerts/$alertId/resolve'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/alerts/$alertId/resolve'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -539,14 +668,13 @@ class ApiService {
     required String endStop,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/search/routes'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'startStop': startStop,
-          'endStop': endStop,
-        }),
-      ).timeout(const Duration(seconds: 15));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/search/routes'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'startStop': startStop, 'endStop': endStop}),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -561,9 +689,9 @@ class ApiService {
 
   Future<Map<String, dynamic>> getRouteInsights(String routeId) async {
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/routes/$routeId/insights'),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('${ApiConfig.baseUrl}/routes/$routeId/insights'))
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -585,10 +713,12 @@ class ApiService {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/users/$userId'),
-        headers: {'Authorization': 'Bearer $token'},
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(
+            Uri.parse('${ApiConfig.baseUrl}/users/$userId'),
+            headers: {'Authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -611,18 +741,20 @@ class ApiService {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
-      final response = await http.put(
-        Uri.parse('${ApiConfig.baseUrl}/users/$userId/profile'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
-          'fullName': fullName,
-          'phone': phone,
-          'preferences': preferences,
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .put(
+            Uri.parse('${ApiConfig.baseUrl}/users/$userId/profile'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({
+              'fullName': fullName,
+              'phone': phone,
+              'preferences': preferences,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -644,10 +776,12 @@ class ApiService {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/admin/dashboard'),
-        headers: {'Authorization': 'Bearer $token'},
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(
+            Uri.parse('${ApiConfig.baseUrl}/admin/dashboard'),
+            headers: {'Authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -665,10 +799,12 @@ class ApiService {
       final token = await _getToken();
       if (token == null) throw Exception('No authentication token');
 
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/admin/analytics/routes'),
-        headers: {'Authorization': 'Bearer $token'},
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(
+            Uri.parse('${ApiConfig.baseUrl}/admin/analytics/routes'),
+            headers: {'Authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -687,9 +823,9 @@ class ApiService {
 
   Future<Map<String, dynamic>> checkBackendHealth() async {
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/health'),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('${ApiConfig.baseUrl}/health'))
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
@@ -704,9 +840,9 @@ class ApiService {
 
   Future<Map<String, dynamic>> getBackendStatus() async {
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/status'),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(Uri.parse('${ApiConfig.baseUrl}/status'))
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);

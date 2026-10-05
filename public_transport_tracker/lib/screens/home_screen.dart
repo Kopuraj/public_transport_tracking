@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -6,6 +6,8 @@ import '../services/socket_service.dart';
 import '../services/map_service.dart';
 import '../services/notification_service.dart';
 import '../services/geofencing_service.dart';
+import '../services/api_service.dart';
+import 'routes_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -28,11 +30,16 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<String, LatLng> _liveBuses = {};
   StreamSubscription? _gpsSubscription;
   StreamSubscription? _userLocationSubscription;
+  StreamSubscription? _tripStartedSubscription;
+  StreamSubscription? _tripEndedSubscription;
+  Timer? _activeTripRefreshTimer;
+  List<Map<String, dynamic>> _activeTrips = [];
 
   // Services
   final MapService _mapsService = MapService();
   final NotificationService _notificationService = NotificationService();
   final GeofencingService _geofencingService = GeofencingService();
+  final ApiService _apiService = ApiService();
 
   // Filter states
   String _selectedFilter = 'All';
@@ -47,6 +54,11 @@ class _HomeScreenState extends State<HomeScreen> {
     _initializeServices();
     _connectToRealTimeUpdates();
     _startUserLocationTracking();
+    _loadActiveTrips();
+    _activeTripRefreshTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _loadActiveTrips(),
+    );
   }
 
   @override
@@ -54,6 +66,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _searchController.dispose();
     _gpsSubscription?.cancel();
     _userLocationSubscription?.cancel();
+    _tripStartedSubscription?.cancel();
+    _tripEndedSubscription?.cancel();
+    _activeTripRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -62,9 +77,9 @@ class _HomeScreenState extends State<HomeScreen> {
       await _notificationService.initialize();
       await _geofencingService.initialize();
       await _geofencingService.start();
-      debugPrint('✅ All services initialized');
+      debugPrint('âœ… All services initialized');
     } catch (e) {
-      debugPrint('❌ Error initializing services: $e');
+      debugPrint('âŒ Error initializing services: $e');
     }
   }
 
@@ -79,14 +94,58 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         setState(() {
           _liveBuses[data['tripId']] = newPosition;
+          final index = _activeTrips.indexWhere(
+            (trip) => trip['id'] == data['tripId'],
+          );
+          if (index >= 0) {
+            _activeTrips[index] = {
+              ..._activeTrips[index],
+              'currentLocation': data['location'],
+              'eta': data['eta'],
+            };
+          }
           _updateBusMarkers();
         });
       }
     });
+    _tripStartedSubscription = SocketService().tripStarted.listen(
+      (_) => _loadActiveTrips(),
+    );
+    _tripEndedSubscription = SocketService().tripEnded.listen(
+      (_) => _loadActiveTrips(),
+    );
+  }
+
+  Future<void> _loadActiveTrips() async {
+    try {
+      final result = await _apiService.getActiveTrips();
+      if (!mounted) return;
+      final trips = List<Map<String, dynamic>>.from(result['trips'] ?? []);
+      setState(() {
+        _activeTrips = trips;
+        _liveBuses.clear();
+        for (final trip in trips) {
+          final location = trip['currentLocation'];
+          if (location is Map &&
+              location['latitude'] is num &&
+              location['longitude'] is num) {
+            _liveBuses[trip['id'].toString()] = LatLng(
+              (location['latitude'] as num).toDouble(),
+              (location['longitude'] as num).toDouble(),
+            );
+          }
+        }
+        _updateBusMarkers();
+      });
+    } catch (error) {
+      debugPrint('Could not load active trips: $error');
+    }
   }
 
   void _startUserLocationTracking() {
-    _userLocationSubscription = _mapsService.getLocationUpdates().listen((location) {
+    _userLocationSubscription = _mapsService.getLocationUpdates().listen((
+      location,
+    ) {
       if (mounted) {
         setState(() {
           _userLocation = location;
@@ -96,10 +155,28 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  void _searchDestination() {
+    final query = _searchController.text.trim();
+    if (query.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Type a route number, town, or bus stop.'),
+        ),
+      );
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => RoutesScreen(initialQuery: query)),
+    );
+  }
+
   void _updateBusMarkers() {
     _busMarkers.clear();
     for (final entry in _liveBuses.entries) {
-      final busNumber = entry.key.contains('_') ? entry.key.split('_').last : entry.key;
+      final busNumber = entry.key.contains('_')
+          ? entry.key.split('_').last
+          : entry.key;
       _busMarkers.add(
         _mapsService.createBusMarker(entry.value, busNumber: busNumber),
       );
@@ -131,14 +208,20 @@ class _HomeScreenState extends State<HomeScreen> {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.blue,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
                     busNumber,
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -198,7 +281,9 @@ class _HomeScreenState extends State<HomeScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('You\'ll be notified when Bus $busNumber approaches'),
+              content: Text(
+                'You\'ll be notified when Bus $busNumber approaches',
+              ),
               backgroundColor: Colors.green,
             ),
           );
@@ -256,10 +341,17 @@ class _HomeScreenState extends State<HomeScreen> {
                         shape: BoxShape.circle,
                         color: Colors.white,
                         boxShadow: [
-                          BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 8),
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.1),
+                            blurRadius: 8,
+                          ),
                         ],
                       ),
-                      child: const Icon(Icons.account_circle, color: Color(0xFF0D131B), size: 24),
+                      child: const Icon(
+                        Icons.account_circle,
+                        color: Color(0xFF0D131B),
+                        size: 24,
+                      ),
                     ),
                     GestureDetector(
                       onTap: () => ScaffoldMessenger.of(context).showSnackBar(
@@ -271,10 +363,17 @@ class _HomeScreenState extends State<HomeScreen> {
                           shape: BoxShape.circle,
                           color: Colors.white,
                           boxShadow: [
-                            BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 8),
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.1),
+                              blurRadius: 8,
+                            ),
                           ],
                         ),
-                        child: const Icon(Icons.notifications, color: Color(0xFF0D131B), size: 24),
+                        child: const Icon(
+                          Icons.notifications,
+                          color: Color(0xFF0D131B),
+                          size: 24,
+                        ),
                       ),
                     ),
                   ],
@@ -310,12 +409,17 @@ class _HomeScreenState extends State<HomeScreen> {
                             border: InputBorder.none,
                             contentPadding: EdgeInsets.symmetric(vertical: 12),
                           ),
-                          onSubmitted: (_) => Navigator.pushNamed(context, '/trip-planner'),
+                          textInputAction: TextInputAction.search,
+                          onSubmitted: (_) => _searchDestination(),
                         ),
                       ),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 12),
-                        child: Icon(Icons.mic, color: Color(0xFF136AEC)),
+                      IconButton(
+                        tooltip: 'Search destination',
+                        onPressed: _searchDestination,
+                        icon: const Icon(
+                          Icons.arrow_forward,
+                          color: Color(0xFF136AEC),
+                        ),
                       ),
                     ],
                   ),
@@ -325,14 +429,23 @@ class _HomeScreenState extends State<HomeScreen> {
                 // Filter Buttons Row
                 Row(
                   children: [
-                    _buildFilterButton('All', _selectedFilter == 'All',
-                        () => setState(() => _selectedFilter = 'All')),
+                    _buildFilterButton(
+                      'All',
+                      _selectedFilter == 'All',
+                      () => setState(() => _selectedFilter = 'All'),
+                    ),
                     const SizedBox(width: 8),
-                    _buildFilterButton('Bus', _selectedFilter == 'Bus',
-                        () => setState(() => _selectedFilter = 'Bus')),
+                    _buildFilterButton(
+                      'Bus',
+                      _selectedFilter == 'Bus',
+                      () => setState(() => _selectedFilter = 'Bus'),
+                    ),
                     const SizedBox(width: 8),
-                    _buildFilterButton('Train', _selectedFilter == 'Train',
-                        () => setState(() => _selectedFilter = 'Train')),
+                    _buildFilterButton(
+                      'Train',
+                      _selectedFilter == 'Train',
+                      () => setState(() => _selectedFilter = 'Train'),
+                    ),
                     const Spacer(),
                     _buildCrowdFilterButton(),
                   ],
@@ -366,9 +479,18 @@ class _HomeScreenState extends State<HomeScreen> {
                       height: 44,
                       decoration: BoxDecoration(
                         color: Colors.white,
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 8)],
-                        border: const Border(bottom: BorderSide(color: Color(0xFFE0E6F2))),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(8),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.1),
+                            blurRadius: 8,
+                          ),
+                        ],
+                        border: const Border(
+                          bottom: BorderSide(color: Color(0xFFE0E6F2)),
+                        ),
                       ),
                       child: const Icon(Icons.add, color: Color(0xFF0D131B)),
                     ),
@@ -387,8 +509,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       height: 44,
                       decoration: BoxDecoration(
                         color: Colors.white,
-                        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
-                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 8)],
+                        borderRadius: const BorderRadius.vertical(
+                          bottom: Radius.circular(8),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.1),
+                            blurRadius: 8,
+                          ),
+                        ],
                       ),
                       child: const Icon(Icons.remove, color: Color(0xFF0D131B)),
                     ),
@@ -403,9 +532,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: Colors.white,
-                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 8)],
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.1),
+                        blurRadius: 8,
+                      ),
+                    ],
                   ),
-                  child: const Icon(Icons.my_location, color: Color(0xFF136AEC)),
+                  child: const Icon(
+                    Icons.my_location,
+                    color: Color(0xFF136AEC),
+                  ),
                 ),
               ),
             ],
@@ -421,9 +558,15 @@ class _HomeScreenState extends State<HomeScreen> {
             return Container(
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(24),
+                ),
                 boxShadow: [
-                  BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 30, spreadRadius: -10),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 30,
+                    spreadRadius: -10,
+                  ),
                 ],
               ),
               child: SingleChildScrollView(
@@ -444,7 +587,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     // Header
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -457,9 +603,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                           GestureDetector(
-                            onTap: () => Navigator.pushNamed(context, '/routes'),
+                            onTap: () =>
+                                Navigator.pushNamed(context, '/trip-planner'),
                             child: const Text(
-                              'See all',
+                              'View schedule',
                               style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w600,
@@ -476,13 +623,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Row(
+                          Row(
                             children: [
-                              Icon(Icons.location_on, color: Color(0xFF136AEC), size: 20),
-                              SizedBox(width: 8),
+                              const Icon(
+                                Icons.location_on,
+                                color: Color(0xFF136AEC),
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
                               Text(
-                                'Galle Bus Stand',
-                                style: TextStyle(
+                                _activeTrips.isEmpty
+                                    ? 'No active buses'
+                                    : '${_activeTrips.length} buses currently live',
+                                style: const TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600,
                                   color: Color(0xFF555D6E),
@@ -491,9 +644,48 @@ class _HomeScreenState extends State<HomeScreen> {
                             ],
                           ),
                           const SizedBox(height: 12),
-                          _buildBusStopItem('502', 'Galle - Hapugala', 'Many Seats Available', Colors.green, '3 min'),
-                          const SizedBox(height: 8),
-                          _buildBusStopItem('3', 'Galle - Matara', 'Few Seats', Colors.orange, '8 min'),
+                          if (_activeTrips.isEmpty)
+                            const Text(
+                              'Ask a driver to start a trip, then refresh.',
+                              style: TextStyle(color: Colors.grey),
+                            )
+                          else
+                            ..._activeTrips.map((trip) {
+                              final route = Map<String, dynamic>.from(
+                                trip['route'] ?? {},
+                              );
+                              final crowd =
+                                  trip['crowdLevel']?.toString() ?? 'unknown';
+                              final color = crowd == 'full'
+                                  ? Colors.red
+                                  : crowd == 'standing'
+                                  ? Colors.orange
+                                  : Colors.green;
+                              final eta =
+                                  trip['eta'] is Map &&
+                                      trip['eta']['etaMinutes'] != null
+                                  ? '${trip['eta']['etaMinutes']} min'
+                                  : 'LIVE';
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: GestureDetector(
+                                  onTap: () => Navigator.pushNamed(
+                                    context,
+                                    '/trip-tracking',
+                                    arguments: route,
+                                  ),
+                                  child: _buildBusStopItem(
+                                    route['routeNumber']?.toString() ??
+                                        trip['routeId']?.toString() ??
+                                        '-',
+                                    '${route['from'] ?? 'Unknown'} - ${route['to'] ?? 'Unknown'}',
+                                    '$crowd (${trip['occupancy'] ?? 0}/${trip['capacity'] ?? 55})',
+                                    color,
+                                    eta,
+                                  ),
+                                ),
+                              );
+                            }),
                         ],
                       ),
                     ),
@@ -507,7 +699,13 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildBusStopItem(String number, String route, String crowd, Color crowdColor, String eta) {
+  Widget _buildBusStopItem(
+    String number,
+    String route,
+    String crowd,
+    Color crowdColor,
+    String eta,
+  ) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -527,7 +725,11 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Center(
               child: Text(
                 number,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
               ),
             ),
           ),
@@ -536,13 +738,27 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(route, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF0D131B))),
+                Text(
+                  route,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF0D131B),
+                  ),
+                ),
                 const SizedBox(height: 4),
                 Row(
                   children: [
                     CircleAvatar(radius: 3, backgroundColor: crowdColor),
                     const SizedBox(width: 4),
-                    Text(crowd, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: crowdColor)),
+                    Text(
+                      crowd,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: crowdColor,
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -551,8 +767,22 @@ class _HomeScreenState extends State<HomeScreen> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(eta, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF136AEC))),
-              const Text('ON TIME', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Color(0xFF999CA6))),
+              Text(
+                eta,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF136AEC),
+                ),
+              ),
+              const Text(
+                'ON TIME',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF999CA6),
+                ),
+              ),
             ],
           ),
         ],
@@ -568,7 +798,12 @@ class _HomeScreenState extends State<HomeScreen> {
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFF136AEC) : Colors.white,
           borderRadius: BorderRadius.circular(20),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 6)],
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 6,
+            ),
+          ],
         ),
         child: Text(
           label,
@@ -592,7 +827,9 @@ class _HomeScreenState extends State<HomeScreen> {
             children: ['All', 'Available', 'Few Seats', 'Full'].map((level) {
               return ListTile(
                 title: Text(level),
-                trailing: _crowdFilter == level ? const Icon(Icons.check, color: Colors.blue) : null,
+                trailing: _crowdFilter == level
+                    ? const Icon(Icons.check, color: Colors.blue)
+                    : null,
                 onTap: () {
                   setState(() => _crowdFilter = level);
                   Navigator.pop(context);
@@ -607,15 +844,31 @@ class _HomeScreenState extends State<HomeScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(20),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 6)],
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 6,
+            ),
+          ],
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(Icons.people, size: 14, color: Color(0xFF0D131B)),
             const SizedBox(width: 4),
-            Text(_crowdFilter, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF0D131B))),
-            const Icon(Icons.keyboard_arrow_down, size: 14, color: Color(0xFF0D131B)),
+            Text(
+              _crowdFilter,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF0D131B),
+              ),
+            ),
+            const Icon(
+              Icons.keyboard_arrow_down,
+              size: 14,
+              color: Color(0xFF0D131B),
+            ),
           ],
         ),
       ),

@@ -38,6 +38,10 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
   StreamSubscription? _gpsSubscription;
   StreamSubscription? _crowdSubscription;
   StreamSubscription? _tripStartedSubscription;
+  StreamSubscription? _tripEndedSubscription;
+  StreamSubscription? _emergencyAlertSubscription;
+  StreamSubscription? _alertResolvedSubscription;
+  List<Map<String, dynamic>> _tripAlerts = [];
 
   @override
   void initState() {
@@ -49,6 +53,40 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
       if (data['routeId'] == _selectedRoute!['id']) {
         _selectRoute(_selectedRoute!);
       }
+    });
+    _tripEndedSubscription = SocketService().tripEnded.listen((data) {
+      if (!mounted || data['tripId'] != _selectedTrip?['id']) return;
+      setState(() {
+        _selectedTrip = null;
+        _etaText = '--';
+        _occupancyText = 'Ended';
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('This trip has ended.')));
+    });
+    _emergencyAlertSubscription = SocketService().emergencyAlerts.listen((
+      alert,
+    ) {
+      if (!mounted || alert['tripId'] != _selectedTrip?['id']) return;
+      setState(() {
+        _tripAlerts.removeWhere((item) => item['id'] == alert['alertId']);
+        _tripAlerts.insert(0, {...alert, 'id': alert['alertId']});
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(alert['message']?.toString() ?? 'Driver service alert'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    });
+    _alertResolvedSubscription = SocketService().alertResolved.listen((data) {
+      if (mounted)
+        setState(
+          () => _tripAlerts.removeWhere(
+            (alert) => alert['id'] == data['alertId'],
+          ),
+        );
     });
   }
 
@@ -71,7 +109,9 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     super.didChangeDependencies();
     // Accept route passed from Routes screen
     final args = ModalRoute.of(context)?.settings.arguments;
-    if (args != null && args is Map<String, dynamic> && _selectedRoute == null) {
+    if (args != null &&
+        args is Map<String, dynamic> &&
+        _selectedRoute == null) {
       _selectRoute(args);
     }
   }
@@ -81,6 +121,9 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     _gpsSubscription?.cancel();
     _crowdSubscription?.cancel();
     _tripStartedSubscription?.cancel();
+    _tripEndedSubscription?.cancel();
+    _emergencyAlertSubscription?.cancel();
+    _alertResolvedSubscription?.cancel();
     super.dispose();
   }
 
@@ -129,9 +172,21 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     _gpsSubscription?.cancel();
     _crowdSubscription?.cancel();
 
-    setState(() => _selectedTrip = trip);
+    setState(() {
+      _selectedTrip = trip;
+      _tripAlerts = [];
+      _etaText = trip['etaMinutes'] == null
+          ? '--'
+          : '${trip['etaMinutes']} min';
+      final occupancy = trip['occupancy'] ?? 0;
+      final capacity = trip['capacity'] ?? 55;
+      _occupancyText =
+          '${trip['crowdLevel'] ?? 'unknown'} ($occupancy/$capacity)'
+              .toUpperCase();
+    });
 
     final tripId = trip['id'] ?? '';
+    _loadTripAlerts(tripId.toString());
 
     final currentLocation = trip['currentLocation'];
     if (currentLocation is Map &&
@@ -168,9 +223,24 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
       if (data['tripId'] != tripId) return;
       setState(() {
         _occupancyText =
-            data['crowdLevel']?.toString().toUpperCase() ?? 'Unknown';
+            '${data['crowdLevel'] ?? 'unknown'} (${data['occupancy'] ?? 0}/${data['capacity'] ?? 55})'
+                .toUpperCase();
       });
     });
+  }
+
+  Future<void> _loadTripAlerts(String tripId) async {
+    try {
+      final result = await _apiService.getActiveAlerts();
+      if (!mounted || _selectedTrip?['id']?.toString() != tripId) return;
+      setState(() {
+        _tripAlerts = List<Map<String, dynamic>>.from(
+          result['alerts'] ?? [],
+        ).where((alert) => alert['tripId']?.toString() == tripId).toList();
+      });
+    } catch (error) {
+      debugPrint('Could not load trip alerts: $error');
+    }
   }
 
   @override
@@ -185,9 +255,10 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
               ? 'Find a Bus'
               : '${_selectedRoute!['from']} → ${_selectedRoute!['to']}',
           style: const TextStyle(
-              color: Color(0xFF0D131B),
-              fontSize: 18,
-              fontWeight: FontWeight.bold),
+            color: Color(0xFF0D131B),
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         actions: [
           if (_selectedRoute != null)
@@ -198,18 +269,20 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                 _gpsSubscription?.cancel();
                 _crowdSubscription?.cancel();
               }),
-              child: const Text('Change Route',
-                  style: TextStyle(color: Color(0xFF136AEC))),
+              child: const Text(
+                'Change Route',
+                style: TextStyle(color: Color(0xFF136AEC)),
+              ),
             ),
         ],
       ),
       body: _selectedRoute == null
           ? (_useLegacyRoutePicker
-            ? _buildRoutePicker()
-            : FindBusScreen(onBusSelected: _applyMatchedBus))
+                ? _buildRoutePicker()
+                : FindBusScreen(onBusSelected: _applyMatchedBus))
           : _selectedTrip == null
-              ? _buildTripPicker()
-              : _buildLiveTracking(),
+          ? _buildTripPicker()
+          : _buildLiveTracking(),
     );
   }
 
@@ -224,16 +297,23 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.directions_bus_outlined, size: 64, color: Colors.grey),
+            const Icon(
+              Icons.directions_bus_outlined,
+              size: 64,
+              color: Colors.grey,
+            ),
             const SizedBox(height: 16),
-            const Text('No routes available',
-                style: TextStyle(color: Colors.grey, fontSize: 16)),
+            const Text(
+              'No routes available',
+              style: TextStyle(color: Colors.grey, fontSize: 16),
+            ),
             const SizedBox(height: 16),
             ElevatedButton(
               onPressed: _loadRoutes,
               style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF136AEC),
-                  foregroundColor: Colors.white),
+                backgroundColor: const Color(0xFF136AEC),
+                foregroundColor: Colors.white,
+              ),
               child: const Text('Refresh'),
             ),
           ],
@@ -246,11 +326,14 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
       children: [
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
-          child: Text('Select a route to track',
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF0D131B))),
+          child: Text(
+            'Select a route to track',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF0D131B),
+            ),
+          ),
         ),
         Expanded(
           child: ListView.builder(
@@ -272,16 +355,21 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                     children: [
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 6),
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFF136AEC),
                           borderRadius: BorderRadius.circular(8),
                         ),
-                        child: Text(route['routeNumber'] ?? '',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16)),
+                        child: Text(
+                          route['routeNumber'] ?? '',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -291,13 +379,16 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                             Text(
                               '${route['from']} → ${route['to']}',
                               style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF0D131B)),
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF0D131B),
+                              ),
                             ),
                             Text(
                               '${route['fare']} · ${route['frequency']}',
                               style: const TextStyle(
-                                  fontSize: 12, color: Color(0xFF999CA6)),
+                                fontSize: 12,
+                                color: Color(0xFF999CA6),
+                              ),
                             ),
                           ],
                         ),
@@ -339,7 +430,9 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
               Text(
                 'Route ${_selectedRoute!['routeNumber']} — ${_selectedRoute!['from']} to ${_selectedRoute!['to']}',
                 style: const TextStyle(
-                    fontWeight: FontWeight.w600, color: Color(0xFF0D131B)),
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF0D131B),
+                ),
               ),
             ],
           ),
@@ -347,11 +440,14 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
 
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Text('Active buses on this route',
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF0D131B))),
+          child: Text(
+            'Active buses on this route',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF0D131B),
+            ),
+          ),
         ),
         const SizedBox(height: 8),
 
@@ -361,20 +457,28 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.directions_bus_outlined,
-                      size: 64, color: Colors.grey),
+                  const Icon(
+                    Icons.directions_bus_outlined,
+                    size: 64,
+                    color: Colors.grey,
+                  ),
                   const SizedBox(height: 16),
-                  const Text('No active buses on this route right now',
-                      style: TextStyle(color: Colors.grey)),
+                  const Text(
+                    'No active buses on this route right now',
+                    style: TextStyle(color: Colors.grey),
+                  ),
                   const SizedBox(height: 8),
-                  const Text('A driver needs to start a trip first',
-                      style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  const Text(
+                    'A driver needs to start a trip first',
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
                   const SizedBox(height: 20),
                   ElevatedButton(
                     onPressed: () => _selectRoute(_selectedRoute!),
                     style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF136AEC),
-                        foregroundColor: Colors.white),
+                      backgroundColor: const Color(0xFF136AEC),
+                      foregroundColor: Colors.white,
+                    ),
                     child: const Text('Refresh'),
                   ),
                 ],
@@ -406,8 +510,10 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                             color: Colors.green.shade50,
                             shape: BoxShape.circle,
                           ),
-                          child: Icon(Icons.directions_bus,
-                              color: Colors.green.shade600),
+                          child: Icon(
+                            Icons.directions_bus,
+                            color: Colors.green.shade600,
+                          ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -417,34 +523,44 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                               Text(
                                 'Bus ${trip['vehicleId'] ?? 'Unknown'}',
                                 style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFF0D131B)),
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF0D131B),
+                                ),
                               ),
                               Text(
                                 'Trip ID: ${trip['id']?.toString().substring(0, 8) ?? ''}...',
                                 style: const TextStyle(
-                                    fontSize: 11, color: Color(0xFF999CA6)),
+                                  fontSize: 11,
+                                  color: Color(0xFF999CA6),
+                                ),
                               ),
                             ],
                           ),
                         ),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
                             color: Colors.green.shade50,
                             borderRadius: BorderRadius.circular(20),
                             border: Border.all(color: Colors.green),
                           ),
-                          child: const Text('LIVE',
-                              style: TextStyle(
-                                  color: Colors.green,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 11)),
+                          child: const Text(
+                            'LIVE',
+                            style: TextStyle(
+                              color: Colors.green,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11,
+                            ),
+                          ),
                         ),
                         const SizedBox(width: 8),
-                        const Icon(Icons.chevron_right,
-                            color: Color(0xFF999CA6)),
+                        const Icon(
+                          Icons.chevron_right,
+                          color: Color(0xFF999CA6),
+                        ),
                       ],
                     ),
                   ),
@@ -461,11 +577,22 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     final stops = (_selectedRoute!['stops'] as List? ?? [])
         .map((s) => s as Map<String, dynamic>)
         .toList();
+    final routePoints = stops
+        .map((stop) {
+          final lat = stop['lat'] ?? stop['latitude'];
+          final lng = stop['lng'] ?? stop['longitude'];
+          if (lat is! num || lng is! num) return null;
+          return LatLng(lat.toDouble(), lng.toDouble());
+        })
+        .whereType<LatLng>()
+        .toList();
 
     Color occupancyColor = Colors.green;
-    if (_occupancyText == 'HEAVY' || _occupancyText == 'FULL') {
+    if (_occupancyText.startsWith('HEAVY') ||
+        _occupancyText.startsWith('FULL')) {
       occupancyColor = Colors.red;
-    } else if (_occupancyText == 'MEDIUM' || _occupancyText == 'STANDING') {
+    } else if (_occupancyText.startsWith('MEDIUM') ||
+        _occupancyText.startsWith('STANDING')) {
       occupancyColor = Colors.orange;
     }
 
@@ -486,22 +613,65 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
               zoom: 14,
               mapController: _mapController,
               onMapReady: () => setState(() => _isMapReady = true),
+              polylines: routePoints.length > 1
+                  ? [MapService().createRoutePolyline(routePoints)]
+                  : const [],
               markers: [
-                MapService().createBusMarker(
-                  _busLocation,
-                  busNumber: _selectedRoute!['routeNumber'],
-                ),
                 ...stops.map((stop) {
-                  if (stop['lat'] != null && stop['lng'] != null) {
+                  final lat = stop['lat'] ?? stop['latitude'];
+                  final lng = stop['lng'] ?? stop['longitude'];
+                  if (lat is num && lng is num) {
                     return MapService().createBusStopMarker(
-                      LatLng((stop['lat'] as num).toDouble(),
-                          (stop['lng'] as num).toDouble()),
+                      LatLng(lat.toDouble(), lng.toDouble()),
                       stopName: stop['name'],
                     );
                   }
                   return null;
                 }).whereType<Marker>(),
+                MapService().createBusMarker(
+                  _busLocation,
+                  busNumber: _selectedRoute!['routeNumber'],
+                ),
               ],
+            ),
+          ),
+
+          ..._tripAlerts.map(
+            (alert) => Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.red.shade300),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.warning_amber_rounded, color: Colors.red),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          alert['alertType']?.toString().toUpperCase() ??
+                              'DRIVER ALERT',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.red,
+                          ),
+                        ),
+                        Text(
+                          alert['message']?.toString() ??
+                              'Service disruption reported by this driver.',
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
 
@@ -544,11 +714,14 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Route Stops',
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF0D131B))),
+                const Text(
+                  'Route Stops',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF0D131B),
+                  ),
+                ),
                 const SizedBox(height: 12),
                 ...stops.asMap().entries.map((entry) {
                   final i = entry.key;
@@ -568,17 +741,22 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
                                 ? const Color(0xFF136AEC)
                                 : const Color(0xFFE0E6F2),
                             border: Border.all(
-                                color: const Color(0xFF136AEC), width: 1.5),
+                              color: const Color(0xFF136AEC),
+                              width: 1.5,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 12),
-                        Text(stop['name'] ?? '',
-                            style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: isFirst || isLast
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                color: const Color(0xFF0D131B))),
+                        Text(
+                          stop['name'] ?? '',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: isFirst || isLast
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            color: const Color(0xFF0D131B),
+                          ),
+                        ),
                       ],
                     ),
                   );
@@ -592,11 +770,12 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
     );
   }
 
-  Widget _buildInfoCard(
-      {required IconData icon,
-      required String label,
-      required String value,
-      required Color color}) {
+  Widget _buildInfoCard({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -611,16 +790,22 @@ class _TripTrackingScreenState extends State<TripTrackingScreen> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label,
-                  style: const TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF999CA6),
-                      fontWeight: FontWeight.w600)),
-              Text(value,
-                  style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: color)),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: Color(0xFF999CA6),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
             ],
           ),
         ],

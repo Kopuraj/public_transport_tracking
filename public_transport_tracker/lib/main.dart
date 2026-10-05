@@ -20,8 +20,8 @@ import 'screens/admin_emergency_broadcast_screen.dart';
 import 'screens/schedule_feedback_screen.dart';
 import 'screens/routes_screen.dart';
 import 'screens/trip_tracking_screen.dart';
-import 'screens/trip_planner_screen.dart';
-import 'screens/tickets_screen.dart';
+import 'screens/route_schedule_screen.dart';
+import 'screens/passenger_ticket_screen.dart';
 import 'screens/profile_screen.dart';
 import 'services/api_service.dart';
 import 'services/notification_service.dart';
@@ -29,7 +29,7 @@ import 'services/geofencing_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   try {
     // Initialize Firebase
     await Firebase.initializeApp(
@@ -42,17 +42,16 @@ void main() async {
       ),
     );
     debugPrint('✅ Firebase initialized successfully');
-    
+
     // Initialize core services
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_initializeServices());
     });
-    
   } catch (e) {
     debugPrint('⚠️ Firebase initialization warning: $e');
     // App will fall back to backend authentication
   }
-  
+
   runApp(const TransitLiveApp());
 }
 
@@ -75,7 +74,6 @@ Future<void> _initializeServices() async {
 
     // Setup token refresh mechanism
     _setupTokenRefresh();
-
   } catch (e) {
     debugPrint('⚠️ Service initialization error: $e');
     // Continue with app initialization even if some services fail
@@ -89,7 +87,7 @@ void _setupTokenRefresh() {
     try {
       final apiService = ApiService();
       final token = await apiService.getStoredToken();
-      
+
       if (token != null) {
         // Test token validity
         try {
@@ -117,8 +115,81 @@ class TransitLiveApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        fontFamily: 'Inter',
-        scaffoldBackgroundColor: Color(0xFFF5F5F8),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF14A66A),
+          brightness: Brightness.light,
+          surface: Colors.white,
+        ),
+        scaffoldBackgroundColor: const Color(0xFFF6F7F9),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.white,
+          foregroundColor: Color(0xFF101828),
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          titleTextStyle: TextStyle(
+            color: Color(0xFF101828),
+            fontSize: 19,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        cardTheme: CardThemeData(
+          color: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: const BorderSide(color: Color(0xFFEAECF0)),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: const Color(0xFFF2F4F7),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 15,
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: Color(0xFF14A66A), width: 1.5),
+          ),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF14A66A),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            minimumSize: const Size(0, 50),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            textStyle: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          indicatorColor: const Color(0xFFE1F6EC),
+          labelTextStyle: WidgetStateProperty.resolveWith((states) {
+            return TextStyle(
+              color: states.contains(WidgetState.selected)
+                  ? const Color(0xFF087A4B)
+                  : const Color(0xFF667085),
+              fontSize: 11,
+              fontWeight: states.contains(WidgetState.selected)
+                  ? FontWeight.w700
+                  : FontWeight.w500,
+            );
+          }),
+        ),
       ),
       home: const AuthGuard(),
       routes: {
@@ -130,19 +201,21 @@ class TransitLiveApp extends StatelessWidget {
         '/home': (context) => const MainNavigationScreen(),
         '/routes': (context) => const RoutesScreen(),
         '/trip-tracking': (context) => const TripTrackingScreen(),
-        '/trip-planner': (context) => const TripPlannerScreen(),
-        '/tickets': (context) => const TicketsScreen(),
+        '/trip-planner': (context) => const RouteScheduleScreen(),
+        '/tickets': (context) => const PassengerTicketScreen(),
         '/profile': (context) => const ProfileScreen(),
         '/crowd-reporting': (context) => const CrowdReportingScreen(),
         '/commuter-profile': (context) => const CommuterProfileScreen(),
         '/route-insights': (context) => const RouteInsightsScreen(),
         '/driver-login': (context) => const DriverStaffLoginScreen(),
         '/trip-initialization': (context) => const TripInitializationScreen(),
-        '/driver-trip-dashboard': (context) => const DriverTripDashboardScreen(),
+        '/driver-trip-dashboard': (context) =>
+            const DriverTripDashboardScreen(),
         '/emergency-alert': (context) => const StaffEmergencyAlertScreen(),
         '/trip-summary': (context) => const TripSummaryScreen(),
         '/admin-fleet': (context) => const AdminFleetOverviewScreen(),
-        '/admin-crowd-analytics': (context) => const AdminCrowdAnalyticsScreen(),
+        '/admin-crowd-analytics': (context) =>
+            const AdminCrowdAnalyticsScreen(),
         '/admin-broadcast': (context) => const AdminEmergencyBroadcastScreen(),
         '/schedule-feedback': (context) => const ScheduleFeedbackScreen(),
       },
@@ -260,11 +333,7 @@ class WelcomeScreen extends StatelessWidget {
               const Text(
                 'Real-time public transport tracking\nfor smarter commuting',
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 18,
-                  color: Colors.grey,
-                  height: 1.5,
-                ),
+                style: TextStyle(fontSize: 18, color: Colors.grey, height: 1.5),
               ),
               const SizedBox(height: 50),
               // Features
@@ -331,7 +400,10 @@ class WelcomeScreen extends StatelessWidget {
               const SizedBox(height: 30),
               // Status
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.green.shade50,
                   borderRadius: BorderRadius.circular(20),
@@ -340,7 +412,11 @@ class WelcomeScreen extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.check_circle, color: Colors.green.shade600, size: 16),
+                    Icon(
+                      Icons.check_circle,
+                      color: Colors.green.shade600,
+                      size: 16,
+                    ),
                     const SizedBox(width: 8),
                     Text(
                       'All systems operational',
@@ -393,51 +469,62 @@ class MainNavigationScreen extends StatefulWidget {
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
-  
+
   final List<Widget> _screens = [
     const HomeScreen(),
     const RoutesScreen(),
     const TripTrackingScreen(),
-    const TicketsScreen(),
+    const PassengerTicketScreen(),
     const ProfileScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: _screens[_currentIndex],
-      bottomNavigationBar: BottomNavigationBar(
-        type: BottomNavigationBarType.fixed,
-        currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
-        selectedItemColor: Colors.blue.shade600,
-        unselectedItemColor: Colors.grey,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: 'Home',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.route),
-            label: 'Routes',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.location_on),
-            label: 'Track',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.confirmation_number),
-            label: 'Tickets',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person),
-            label: 'Profile',
-          ),
-        ],
+    return PopScope(
+      canPop: _currentIndex == 0,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _currentIndex != 0) {
+          setState(() => _currentIndex = 0);
+        }
+      },
+      child: Scaffold(
+        body: IndexedStack(index: _currentIndex, children: _screens),
+        bottomNavigationBar: NavigationBar(
+          height: 72,
+          selectedIndex: _currentIndex,
+          onDestinationSelected: (index) {
+            setState(() {
+              _currentIndex = index;
+            });
+          },
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home_rounded),
+              label: 'Home',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.route_outlined),
+              selectedIcon: Icon(Icons.route_rounded),
+              label: 'Routes',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.location_on_outlined),
+              selectedIcon: Icon(Icons.location_on_rounded),
+              label: 'Track',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.confirmation_number_outlined),
+              selectedIcon: Icon(Icons.confirmation_number_rounded),
+              label: 'Tickets',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.person_outline_rounded),
+              selectedIcon: Icon(Icons.person_rounded),
+              label: 'Profile',
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -1,14 +1,67 @@
 import 'package:flutter/material.dart';
+import '../services/api_service.dart';
 
 class StaffEmergencyAlertScreen extends StatefulWidget {
-  const StaffEmergencyAlertScreen({super.key});
+  final String? tripId;
+  final String? routeLabel;
+  final int passengerCount;
+
+  const StaffEmergencyAlertScreen({
+    super.key,
+    this.tripId,
+    this.routeLabel,
+    this.passengerCount = 0,
+  });
 
   @override
-  State<StaffEmergencyAlertScreen> createState() => _StaffEmergencyAlertScreenState();
+  State<StaffEmergencyAlertScreen> createState() =>
+      _StaffEmergencyAlertScreenState();
 }
 
 class _StaffEmergencyAlertScreenState extends State<StaffEmergencyAlertScreen> {
   String? _selectedEmergency;
+  final TextEditingController _messageController = TextEditingController();
+  bool _sending = false;
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _broadcast() async {
+    if (widget.tripId == null || _selectedEmergency == null) return;
+    setState(() => _sending = true);
+    try {
+      final selected = _emergencyTypes.firstWhere(
+        (item) => item['id'] == _selectedEmergency,
+      );
+      final custom = _messageController.text.trim();
+      await ApiService().sendEmergencyAlert(
+        tripId: widget.tripId!,
+        alertType: _selectedEmergency!,
+        message: custom.isEmpty ? selected['description'].toString() : custom,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Alert broadcast to passengers'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      Navigator.pop(context);
+    } catch (error) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.red,
+          ),
+        );
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
 
   final List<Map<String, dynamic>> _emergencyTypes = [
     {
@@ -151,7 +204,9 @@ class _StaffEmergencyAlertScreenState extends State<StaffEmergencyAlertScreen> {
                               Container(
                                 padding: EdgeInsets.all(10),
                                 decoration: BoxDecoration(
-                                  color: emergency['color'].withValues(alpha: 0.2),
+                                  color: emergency['color'].withValues(
+                                    alpha: 0.2,
+                                  ),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Icon(
@@ -185,7 +240,10 @@ class _StaffEmergencyAlertScreenState extends State<StaffEmergencyAlertScreen> {
                                 ),
                               ),
                               if (isSelected)
-                                Icon(Icons.check_circle, color: emergency['color']),
+                                Icon(
+                                  Icons.check_circle,
+                                  color: emergency['color'],
+                                ),
                             ],
                           ),
                         ),
@@ -222,10 +280,12 @@ class _StaffEmergencyAlertScreenState extends State<StaffEmergencyAlertScreen> {
                         border: Border.all(color: Color(0xFFE0E6F2)),
                       ),
                       child: TextField(
+                        controller: _messageController,
                         maxLines: 4,
                         decoration: InputDecoration(
                           border: InputBorder.none,
-                          hintText: 'Type additional message for passengers (optional)...',
+                          hintText:
+                              'Type additional message for passengers (optional)...',
                           hintStyle: TextStyle(
                             fontSize: 12,
                             color: Color(0xFF999CA6),
@@ -287,7 +347,7 @@ class _StaffEmergencyAlertScreenState extends State<StaffEmergencyAlertScreen> {
                                 ),
                               ),
                               Text(
-                                'Route 502: Galle - Hapugala',
+                                widget.routeLabel ?? 'Current active trip',
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: Color(0xFF136AEC),
@@ -309,7 +369,7 @@ class _StaffEmergencyAlertScreenState extends State<StaffEmergencyAlertScreen> {
                                 ),
                               ),
                               Text(
-                                '24 passengers',
+                                '${widget.passengerCount} passengers',
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: Color(0xFF999CA6),
@@ -354,32 +414,28 @@ class _StaffEmergencyAlertScreenState extends State<StaffEmergencyAlertScreen> {
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: _selectedEmergency == null
+                  onPressed:
+                      _selectedEmergency == null ||
+                          widget.tripId == null ||
+                          _sending
                       ? null
-                      : () {
-                          // Show confirmation dialog
-                          showDialog(
+                      : () async {
+                          final confirmed = await showDialog<bool>(
                             context: context,
-                            builder: (context) => AlertDialog(
+                            builder: (dialogContext) => AlertDialog(
                               title: Text('Broadcast Emergency Alert?'),
                               content: Text(
                                 'This alert will be sent to all passengers on this route immediately.',
                               ),
                               actions: [
                                 TextButton(
-                                  onPressed: () => Navigator.pop(context),
+                                  onPressed: () =>
+                                      Navigator.pop(dialogContext, false),
                                   child: Text('Cancel'),
                                 ),
                                 ElevatedButton(
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text('Alert broadcasted successfully!'),
-                                        backgroundColor: Colors.green,
-                                      ),
-                                    );
-                                  },
+                                  onPressed: () =>
+                                      Navigator.pop(dialogContext, true),
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: Colors.red,
                                   ),
@@ -391,6 +447,7 @@ class _StaffEmergencyAlertScreenState extends State<StaffEmergencyAlertScreen> {
                               ],
                             ),
                           );
+                          if (confirmed == true) await _broadcast();
                         },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,
@@ -400,10 +457,20 @@ class _StaffEmergencyAlertScreenState extends State<StaffEmergencyAlertScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.broadcast_on_home, color: Colors.white),
+                      if (_sending)
+                        const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      else
+                        Icon(Icons.broadcast_on_home, color: Colors.white),
                       SizedBox(width: 8),
                       Text(
-                        'BROADCAST ALERT',
+                        _sending ? 'SENDING...' : 'BROADCAST ALERT',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,

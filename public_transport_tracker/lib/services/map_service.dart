@@ -10,9 +10,12 @@ class MapService {
   MapService._internal();
 
   Location location = Location();
-  
+
   // Default center (you can change this to your city)
-  static const LatLng defaultCenter = LatLng(13.0827, 80.2707); // Chennai, India
+  static const LatLng defaultCenter = LatLng(
+    6.0329,
+    80.2168,
+  ); // Galle, Sri Lanka
 
   /// Check and request location permissions
   Future<bool> checkLocationPermission() async {
@@ -35,7 +38,7 @@ class MapService {
   Future<LatLng?> getCurrentLocation() async {
     try {
       if (!await checkLocationPermission()) return null;
-      
+
       LocationData locationData = await location.getLocation();
       return LatLng(locationData.latitude!, locationData.longitude!);
     } catch (e) {
@@ -55,11 +58,10 @@ class MapService {
     MapController? mapController,
     VoidCallback? onMapReady, // Add this
   }) {
-    
     String getTileUrl() {
       switch (tileProvider) {
         case 'cartodb':
-          return 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
+          return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
         case 'stamen':
           return 'https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg';
         case 'openstreetmap':
@@ -67,7 +69,7 @@ class MapService {
           return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
       }
     }
-    
+
     return SizedBox(
       width: double.infinity,
       height: double.infinity,
@@ -86,20 +88,18 @@ class MapService {
           // Multiple tile layer options for better compatibility
           TileLayer(
             urlTemplate: getTileUrl(),
-            subdomains: const ['a', 'b', 'c'],
             userAgentPackageName: 'com.example.public_transport_tracker',
             maxZoom: 19,
-            // Add fallback and error handling
-            fallbackUrl: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
           ),
-        
-        // Polylines (routes, paths)
-        if (polylines.isNotEmpty)
-          PolylineLayer(polylines: polylines),
-        
-        // Markers (buses, stops, etc.)
-        if (markers.isNotEmpty)
-          MarkerLayer(markers: markers),
+
+          // Polylines (routes, paths)
+          if (polylines.isNotEmpty) PolylineLayer(polylines: polylines),
+
+          // Markers (buses, stops, etc.)
+          if (markers.isNotEmpty) MarkerLayer(markers: markers),
+          const RichAttributionWidget(
+            attributions: [TextSourceAttribution('OpenStreetMap contributors')],
+          ),
         ],
       ),
     );
@@ -117,11 +117,7 @@ class MapService {
           shape: BoxShape.circle,
           border: Border.all(color: Colors.white, width: 2),
         ),
-        child: Icon(
-          Icons.directions_bus,
-          color: Colors.white,
-          size: 20,
-        ),
+        child: Icon(Icons.directions_bus, color: Colors.white, size: 20),
       ),
     );
   }
@@ -138,11 +134,7 @@ class MapService {
           shape: BoxShape.circle,
           border: Border.all(color: Colors.white, width: 2),
         ),
-        child: Icon(
-          Icons.location_on,
-          color: Colors.white,
-          size: 16,
-        ),
+        child: Icon(Icons.location_on, color: Colors.white, size: 16),
       ),
     );
   }
@@ -159,11 +151,7 @@ class MapService {
           shape: BoxShape.circle,
           border: Border.all(color: Colors.white, width: 2),
         ),
-        child: Icon(
-          Icons.person,
-          color: Colors.white,
-          size: 16,
-        ),
+        child: Icon(Icons.person, color: Colors.white, size: 16),
       ),
     );
   }
@@ -189,7 +177,8 @@ class MapService {
 
   /// Get location updates stream
   Stream<LatLng> getLocationUpdates() {
-    return location.onLocationChanged.map((locationData) =>
-        LatLng(locationData.latitude!, locationData.longitude!));
+    return location.onLocationChanged.map(
+      (locationData) => LatLng(locationData.latitude!, locationData.longitude!),
+    );
   }
 }

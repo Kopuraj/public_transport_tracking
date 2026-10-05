@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 
 class RoutesScreen extends StatefulWidget {
-  const RoutesScreen({super.key});
+  final String initialQuery;
+
+  const RoutesScreen({super.key, this.initialQuery = ''});
 
   @override
   State<RoutesScreen> createState() => _RoutesScreenState();
@@ -20,6 +22,7 @@ class _RoutesScreenState extends State<RoutesScreen> {
   @override
   void initState() {
     super.initState();
+    _searchController.text = widget.initialQuery;
     _loadRoutes();
     _searchController.addListener(_onSearch);
   }
@@ -31,14 +34,17 @@ class _RoutesScreenState extends State<RoutesScreen> {
   }
 
   Future<void> _loadRoutes() async {
-    setState(() { _isLoading = true; _error = null; });
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
     try {
       final result = await _apiService.getAllRoutes();
       if (result['success'] == true) {
         final routes = List<Map<String, dynamic>>.from(result['routes'] ?? []);
         setState(() {
           _allRoutes = routes;
-          _filteredRoutes = routes;
+          _filteredRoutes = _filterRoutes(routes, _searchController.text);
           _isLoading = false;
         });
       } else {
@@ -56,14 +62,38 @@ class _RoutesScreenState extends State<RoutesScreen> {
   }
 
   void _onSearch() {
-    final query = _searchController.text.toLowerCase();
     setState(() {
-      _filteredRoutes = _allRoutes.where((r) {
-        return (r['routeNumber']?.toString().toLowerCase().contains(query) ?? false) ||
-               (r['from']?.toString().toLowerCase().contains(query) ?? false) ||
-               (r['to']?.toString().toLowerCase().contains(query) ?? false);
-      }).toList();
+      _filteredRoutes = _filterRoutes(_allRoutes, _searchController.text);
     });
+  }
+
+  List<Map<String, dynamic>> _filterRoutes(
+    List<Map<String, dynamic>> routes,
+    String input,
+  ) {
+    String normalize(String value) => value
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9 ]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final query = normalize(input);
+    if (query.isEmpty) return List<Map<String, dynamic>>.from(routes);
+    final words = query.split(' ').where((word) => word.length > 1).toList();
+    return routes.where((route) {
+      final searchable = normalize(
+        [
+          route['routeNumber'],
+          route['name'],
+          route['from'],
+          route['to'],
+          ...(route['stops'] as List? ?? const []).map(
+            (stop) => (stop as Map)['name'],
+          ),
+        ].whereType<Object>().join(' '),
+      );
+      return searchable.contains(query) ||
+          (words.isNotEmpty && words.every(searchable.contains));
+    }).toList();
   }
 
   @override
@@ -126,19 +156,19 @@ class _RoutesScreenState extends State<RoutesScreen> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _error != null
-                    ? _buildError()
-                    : _filteredRoutes.isEmpty
-                        ? _buildEmpty()
-                        : RefreshIndicator(
-                            onRefresh: _loadRoutes,
-                            child: ListView.builder(
-                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                              itemCount: _filteredRoutes.length,
-                              itemBuilder: (context, index) {
-                                return _buildRouteCard(_filteredRoutes[index]);
-                              },
-                            ),
-                          ),
+                ? _buildError()
+                : _filteredRoutes.isEmpty
+                ? _buildEmpty()
+                : RefreshIndicator(
+                    onRefresh: _loadRoutes,
+                    child: ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                      itemCount: _filteredRoutes.length,
+                      itemBuilder: (context, index) {
+                        return _buildRouteCard(_filteredRoutes[index]);
+                      },
+                    ),
+                  ),
           ),
         ],
       ),
@@ -154,16 +184,20 @@ class _RoutesScreenState extends State<RoutesScreen> {
           children: [
             const Icon(Icons.cloud_off, size: 64, color: Colors.grey),
             const SizedBox(height: 16),
-            Text(_error!, textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.grey)),
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.grey),
+            ),
             const SizedBox(height: 16),
             ElevatedButton.icon(
               onPressed: _loadRoutes,
               icon: const Icon(Icons.refresh),
               label: const Text('Retry'),
               style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF136AEC),
-                  foregroundColor: Colors.white),
+                backgroundColor: const Color(0xFF136AEC),
+                foregroundColor: Colors.white,
+              ),
             ),
           ],
         ),
@@ -172,13 +206,30 @@ class _RoutesScreenState extends State<RoutesScreen> {
   }
 
   Widget _buildEmpty() {
-    return const Center(
+    return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.directions_bus_outlined, size: 64, color: Colors.grey),
-          SizedBox(height: 16),
-          Text('No routes found', style: TextStyle(color: Colors.grey, fontSize: 16)),
+          const Icon(
+            Icons.directions_bus_outlined,
+            size: 64,
+            color: Colors.grey,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'No route or stop matches “${_searchController.text.trim()}”',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.grey, fontSize: 16),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Try a route number, town, or stored bus-stop name.',
+            style: TextStyle(color: Colors.grey),
+          ),
+          TextButton(
+            onPressed: () => _searchController.clear(),
+            child: const Text('Show all routes'),
+          ),
         ],
       ),
     );
@@ -206,7 +257,10 @@ class _RoutesScreenState extends State<RoutesScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF136AEC),
                     borderRadius: BorderRadius.circular(20),
@@ -214,11 +268,16 @@ class _RoutesScreenState extends State<RoutesScreen> {
                   child: Text(
                     'Route ${route['routeNumber'] ?? ''}',
                     style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold),
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: statusColor.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(16),
@@ -227,9 +286,10 @@ class _RoutesScreenState extends State<RoutesScreen> {
                   child: Text(
                     route['active'] == true ? 'Active' : 'Inactive',
                     style: TextStyle(
-                        color: statusColor,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600),
+                      color: statusColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ],
@@ -243,17 +303,23 @@ class _RoutesScreenState extends State<RoutesScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('FROM',
-                          style: TextStyle(
-                              fontSize: 10,
-                              color: Color(0xFF999CA6),
-                              fontWeight: FontWeight.w600)),
+                      const Text(
+                        'FROM',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Color(0xFF999CA6),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                       const SizedBox(height: 4),
-                      Text(route['from'] ?? '',
-                          style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF0D131B))),
+                      Text(
+                        route['from'] ?? '',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF0D131B),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -262,17 +328,23 @@ class _RoutesScreenState extends State<RoutesScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      const Text('TO',
-                          style: TextStyle(
-                              fontSize: 10,
-                              color: Color(0xFF999CA6),
-                              fontWeight: FontWeight.w600)),
+                      const Text(
+                        'TO',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Color(0xFF999CA6),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                       const SizedBox(height: 4),
-                      Text(route['to'] ?? '',
-                          style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF0D131B))),
+                      Text(
+                        route['to'] ?? '',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF0D131B),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -302,14 +374,19 @@ class _RoutesScreenState extends State<RoutesScreen> {
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.schedule, color: Color(0xFF136AEC), size: 18),
+                  const Icon(
+                    Icons.schedule,
+                    color: Color(0xFF136AEC),
+                    size: 18,
+                  ),
                   const SizedBox(width: 8),
                   Text(
                     'Frequency: ${route['frequency'] ?? '-'}',
                     style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF555D6E),
-                        fontWeight: FontWeight.w500),
+                      fontSize: 12,
+                      color: Color(0xFF555D6E),
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ],
               ),
@@ -323,17 +400,23 @@ class _RoutesScreenState extends State<RoutesScreen> {
   Widget _buildDetailItem(String label, String value) {
     return Column(
       children: [
-        Text(label,
-            style: const TextStyle(
-                fontSize: 10,
-                color: Color(0xFF999CA6),
-                fontWeight: FontWeight.w600)),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 10,
+            color: Color(0xFF999CA6),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         const SizedBox(height: 4),
-        Text(value,
-            style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF0D131B))),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF0D131B),
+          ),
+        ),
       ],
     );
   }
@@ -366,9 +449,10 @@ class _RoutesScreenState extends State<RoutesScreen> {
                   Text(
                     'Route ${route['routeNumber']} — ${route['from']} to ${route['to']}',
                     style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF0D131B)),
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF0D131B),
+                    ),
                   ),
                   GestureDetector(
                     onTap: () => Navigator.pop(context),
@@ -383,11 +467,14 @@ class _RoutesScreenState extends State<RoutesScreen> {
               _buildDetailRow('Fare', route['fare'] ?? '-'),
               _buildDetailRow('Frequency', route['frequency'] ?? '-'),
               const SizedBox(height: 16),
-              const Text('Stops',
-                  style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF0D131B))),
+              const Text(
+                'Stops',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0D131B),
+                ),
+              ),
               const SizedBox(height: 8),
               ...stops.asMap().entries.map((entry) {
                 final i = entry.key;
@@ -406,19 +493,26 @@ class _RoutesScreenState extends State<RoutesScreen> {
                           shape: BoxShape.circle,
                         ),
                         child: Center(
-                          child: Text('${i + 1}',
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  color: i == 0 || i == stops.length - 1
-                                      ? Colors.white
-                                      : const Color(0xFF555D6E),
-                                  fontWeight: FontWeight.bold)),
+                          child: Text(
+                            '${i + 1}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: i == 0 || i == stops.length - 1
+                                  ? Colors.white
+                                  : const Color(0xFF555D6E),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 12),
-                      Text(stop['name'] ?? '',
-                          style: const TextStyle(
-                              fontSize: 14, color: Color(0xFF0D131B))),
+                      Text(
+                        stop['name'] ?? '',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF0D131B),
+                        ),
+                      ),
                     ],
                   ),
                 );
@@ -429,8 +523,11 @@ class _RoutesScreenState extends State<RoutesScreen> {
                 child: ElevatedButton.icon(
                   onPressed: () {
                     Navigator.pop(context);
-                    Navigator.pushNamed(context, '/trip-tracking',
-                        arguments: route);
+                    Navigator.pushNamed(
+                      context,
+                      '/trip-tracking',
+                      arguments: route,
+                    );
                   },
                   icon: const Icon(Icons.location_on),
                   label: const Text('Track Live Buses on This Route'),
@@ -454,16 +551,22 @@ class _RoutesScreenState extends State<RoutesScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF999CA6),
-                  fontWeight: FontWeight.w500)),
-          Text(value,
-              style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF0D131B))),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 14,
+              color: Color(0xFF999CA6),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF0D131B),
+            ),
+          ),
         ],
       ),
     );

@@ -7,10 +7,7 @@ import '../services/map_service.dart';
 class FindBusScreen extends StatefulWidget {
   final ValueChanged<Map<String, dynamic>> onBusSelected;
 
-  const FindBusScreen({
-    super.key,
-    required this.onBusSelected,
-  });
+  const FindBusScreen({super.key, required this.onBusSelected});
 
   @override
   State<FindBusScreen> createState() => _FindBusScreenState();
@@ -27,11 +24,76 @@ class _FindBusScreenState extends State<FindBusScreen> {
   bool _searching = false;
   String? _error;
   List<Map<String, dynamic>> _matches = [];
+  List<Map<String, dynamic>> _stops = [];
+  List<Polyline> _routeLines = [];
+  String? _pickupName;
+  String? _destinationName;
+  bool _hasSearched = false;
 
   @override
   void initState() {
     super.initState();
     _loadCurrentLocation();
+    _loadStops();
+  }
+
+  Future<void> _loadStops() async {
+    try {
+      final result = await _apiService.getAllRoutes();
+      final routes = List<Map<String, dynamic>>.from(result['routes'] ?? []);
+      final unique = <String, Map<String, dynamic>>{};
+      final lines = <Polyline>[];
+      for (final route in routes) {
+        final points = <LatLng>[];
+        for (final raw in (route['stops'] as List? ?? const [])) {
+          final stop = Map<String, dynamic>.from(raw as Map);
+          final lat = (stop['lat'] ?? stop['latitude']) as num?;
+          final lng = (stop['lng'] ?? stop['longitude']) as num?;
+          if (lat == null || lng == null) continue;
+          final location = LatLng(lat.toDouble(), lng.toDouble());
+          points.add(location);
+          final name = stop['name']?.toString() ?? 'Bus stop';
+          unique['$name:${location.latitude}:${location.longitude}'] = {
+            'name': name,
+            'location': location,
+          };
+        }
+        if (points.length > 1) {
+          lines.add(MapService().createRoutePolyline(points));
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _stops = unique.values.toList();
+          _routeLines = lines;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = 'Could not load route stops: $error');
+      }
+    }
+  }
+
+  void _chooseStop(String? key, bool pickup) {
+    if (key == null) return;
+    final stop = _stops.firstWhere(
+      (item) =>
+          '${item['name']}:${(item['location'] as LatLng).latitude}:${(item['location'] as LatLng).longitude}' ==
+          key,
+    );
+    final location = stop['location'] as LatLng;
+    setState(() {
+      if (pickup) {
+        _pickup = location;
+        _pickupName = stop['name'].toString();
+      } else {
+        _destination = location;
+        _destinationName = stop['name'].toString();
+      }
+      _error = null;
+    });
+    _mapController.move(location, 14);
   }
 
   Future<void> _loadCurrentLocation() async {
@@ -48,8 +110,10 @@ class _FindBusScreenState extends State<FindBusScreen> {
     setState(() {
       if (_selectingPickup) {
         _pickup = point;
+        _pickupName = 'Selected map location';
       } else {
         _destination = point;
+        _destinationName = 'Selected map location';
       }
       _error = null;
     });
@@ -67,6 +131,7 @@ class _FindBusScreenState extends State<FindBusScreen> {
       _searching = true;
       _error = null;
       _matches = [];
+      _hasSearched = true;
     });
 
     try {
@@ -132,13 +197,64 @@ class _FindBusScreenState extends State<FindBusScreen> {
           ),
           child: Column(
             children: [
+              DropdownButtonFormField<String>(
+                decoration: const InputDecoration(
+                  labelText: 'Pickup stop',
+                  prefixIcon: Icon(Icons.my_location),
+                ),
+                isExpanded: true,
+                value: _pickupName == null
+                    ? null
+                    : _stops
+                          .where((s) => s['name'] == _pickupName)
+                          .map(
+                            (s) =>
+                                '${s['name']}:${(s['location'] as LatLng).latitude}:${(s['location'] as LatLng).longitude}',
+                          )
+                          .firstOrNull,
+                items: _stops.map((stop) {
+                  final p = stop['location'] as LatLng;
+                  return DropdownMenuItem(
+                    value: '${stop['name']}:${p.latitude}:${p.longitude}',
+                    child: Text(stop['name'].toString()),
+                  );
+                }).toList(),
+                onChanged: (value) => _chooseStop(value, true),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                decoration: const InputDecoration(
+                  labelText: 'Destination stop',
+                  prefixIcon: Icon(Icons.flag),
+                ),
+                isExpanded: true,
+                value: _destinationName == null
+                    ? null
+                    : _stops
+                          .where((s) => s['name'] == _destinationName)
+                          .map(
+                            (s) =>
+                                '${s['name']}:${(s['location'] as LatLng).latitude}:${(s['location'] as LatLng).longitude}',
+                          )
+                          .firstOrNull,
+                items: _stops.map((stop) {
+                  final p = stop['location'] as LatLng;
+                  return DropdownMenuItem(
+                    value: '${stop['name']}:${p.latitude}:${p.longitude}',
+                    child: Text(stop['name'].toString()),
+                  );
+                }).toList(),
+                onChanged: (value) => _chooseStop(value, false),
+              ),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
                     child: ChoiceChip(
                       label: const Text('Set Pickup'),
                       selected: _selectingPickup,
-                      onSelected: (_) => setState(() => _selectingPickup = true),
+                      onSelected: (_) =>
+                          setState(() => _selectingPickup = true),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -146,7 +262,8 @@ class _FindBusScreenState extends State<FindBusScreen> {
                     child: ChoiceChip(
                       label: const Text('Set Destination'),
                       selected: !_selectingPickup,
-                      onSelected: (_) => setState(() => _selectingPickup = false),
+                      onSelected: (_) =>
+                          setState(() => _selectingPickup = false),
                     ),
                   ),
                 ],
@@ -184,7 +301,9 @@ class _FindBusScreenState extends State<FindBusScreen> {
                     child: ElevatedButton.icon(
                       onPressed: _searching ? null : _searchBuses,
                       icon: const Icon(Icons.search),
-                      label: Text(_searching ? 'Searching...' : 'Search Available Buses'),
+                      label: Text(
+                        _searching ? 'Searching...' : 'Search Available Buses',
+                      ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF136AEC),
                         foregroundColor: Colors.white,
@@ -199,6 +318,9 @@ class _FindBusScreenState extends State<FindBusScreen> {
                         _destination = null;
                         _matches = [];
                         _error = null;
+                        _pickupName = null;
+                        _destinationName = null;
+                        _hasSearched = false;
                       });
                     },
                     child: const Text('Clear'),
@@ -228,6 +350,7 @@ class _FindBusScreenState extends State<FindBusScreen> {
             mapController: _mapController,
             zoom: 13,
             markers: markers,
+            polylines: _routeLines,
             onTap: _onMapTap,
           ),
         ),
@@ -238,7 +361,9 @@ class _FindBusScreenState extends State<FindBusScreen> {
                   child: Text(
                     _searching
                         ? 'Searching for matching buses...'
-                        : 'Select pickup and destination, then search.',
+                        : _hasSearched
+                        ? 'No active bus currently serves these stops.'
+                        : 'Choose real route stops or tap the map, then search.',
                     style: const TextStyle(color: Colors.grey),
                   ),
                 )
@@ -247,9 +372,15 @@ class _FindBusScreenState extends State<FindBusScreen> {
                   itemCount: _matches.length,
                   itemBuilder: (context, index) {
                     final match = _matches[index];
-                    final route = Map<String, dynamic>.from(match['route'] ?? {});
-                    final pickupStop = Map<String, dynamic>.from(match['pickupStop'] ?? {});
-                    final dropoffStop = Map<String, dynamic>.from(match['dropoffStop'] ?? {});
+                    final route = Map<String, dynamic>.from(
+                      match['route'] ?? {},
+                    );
+                    final pickupStop = Map<String, dynamic>.from(
+                      match['pickupStop'] ?? {},
+                    );
+                    final dropoffStop = Map<String, dynamic>.from(
+                      match['dropoffStop'] ?? {},
+                    );
 
                     return Card(
                       margin: const EdgeInsets.only(bottom: 10),
@@ -260,11 +391,20 @@ class _FindBusScreenState extends State<FindBusScreen> {
                           children: [
                             Text(
                               'Route ${route['routeNumber'] ?? match['routeId'] ?? '-'}: ${route['from'] ?? '-'} to ${route['to'] ?? '-'}',
-                              style: const TextStyle(fontWeight: FontWeight.bold),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                             const SizedBox(height: 6),
                             Text('Bus: ${match['vehicleId'] ?? 'Unknown'}'),
-                            Text('Crowd: ${match['crowdLevel'] ?? 'unknown'} (${match['occupancy'] ?? 0})'),
+                            Text(
+                              'Crowd: ${match['crowdLevel'] ?? 'unknown'} (${match['occupancy'] ?? 0})',
+                            ),
+                            Text(
+                              match['etaMinutes'] == null
+                                  ? 'Waiting for live GPS'
+                                  : 'Pickup ETA: ${match['etaMinutes']} min',
+                            ),
                             Text('Pickup stop: ${pickupStop['name'] ?? '-'}'),
                             Text('Dropoff stop: ${dropoffStop['name'] ?? '-'}'),
                             const SizedBox(height: 8),

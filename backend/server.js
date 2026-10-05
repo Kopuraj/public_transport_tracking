@@ -12,7 +12,7 @@ const socketIO = require('socket.io');
 const admin = require('firebase-admin');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
-const { findMatchingBuses, normalizeRoute } = require('./route-matcher');
+const { findMatchingBuses, normalizeRoute, mapCurrentLocation } = require('./route-matcher');
 
 // ============================================
 // FIREBASE INITIALIZATION
@@ -106,27 +106,33 @@ async function calculateETA(tripId, currentLat, currentLon) {
     if (!route.exists) return null;
 
     const routeData = route.data();
-    const stops = routeData.stops || [];
+    const stops = tripData.direction === 'inbound'
+      ? [...(routeData.stops || [])].reverse()
+      : routeData.stops || [];
 
     if (stops.length === 0) return null;
 
-    // Find next unvisited stop
-    let nextStop = null;
-    let distanceToNextStop = 0;
-
-    for (const stop of stops) {
-      const dist = calculateDistance(currentLat, currentLon, stop.latitude, stop.longitude);
-      if (dist > 0.1) {
-        nextStop = stop;
-        distanceToNextStop = dist;
-        break;
-      }
-    }
+    const normalizedStops = stops.map((stop) => ({
+      ...stop,
+      latitude: Number(stop.latitude ?? stop.lat),
+      longitude: Number(stop.longitude ?? stop.lng),
+    })).filter((stop) => Number.isFinite(stop.latitude) && Number.isFinite(stop.longitude));
+    let nearestIndex = -1;
+    let nearestDistance = Infinity;
+    normalizedStops.forEach((stop, index) => {
+      const distance = calculateDistance(currentLat, currentLon, stop.latitude, stop.longitude);
+      if (distance < nearestDistance) { nearestDistance = distance; nearestIndex = index; }
+    });
+    const nextIndex = nearestDistance < 0.1 ? nearestIndex + 1 : nearestIndex;
+    const nextStop = normalizedStops[nextIndex];
+    const distanceToNextStop = nextStop
+      ? calculateDistance(currentLat, currentLon, nextStop.latitude, nextStop.longitude)
+      : 0;
 
     if (!nextStop) return null;
 
     // Estimate speed (default 40 km/h for city buses)
-    const estimatedSpeed = tripData.currentSpeed || 40;
+    const estimatedSpeed = Math.min(80, Math.max(12, tripData.currentSpeedKmh || 25));
     const timeInHours = distanceToNextStop / estimatedSpeed;
     const timeInMinutes = Math.round(timeInHours * 60);
 
@@ -141,6 +147,39 @@ async function calculateETA(tripId, currentLat, currentLon) {
     console.error('ETA calculation error:', error);
     return null;
   }
+}
+
+function serializeTrip(id, data, route = null) {
+  const normalizedRoute = route ? normalizeRoute(route) : null;
+  const directedRoute = normalizedRoute && data.direction === 'inbound'
+    ? { ...normalizedRoute, from: normalizedRoute.to, to: normalizedRoute.from, stops: [...(normalizedRoute.stops || [])].reverse() }
+    : normalizedRoute;
+  return {
+    id,
+    ...data,
+    currentLocation: mapCurrentLocation(data.currentLocation),
+    startTime: data.startTime?.toDate?.().toISOString?.() || data.startTime || null,
+    lastUpdated: data.lastUpdated?.toDate?.().toISOString?.() || data.lastUpdated || null,
+    route: directedRoute ? { id: data.routeId, ...directedRoute } : undefined,
+  };
+}
+
+function firestoreDate(value) {
+  if (!value) return null;
+  if (typeof value.toDate === 'function') return value.toDate();
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isTripLive(data, maxAgeMs = 15 * 60 * 1000) {
+  const lastUpdated = firestoreDate(data.lastUpdated);
+  const startTime = firestoreDate(data.startTime);
+  const latestActivity = lastUpdated || startTime;
+  return data.status === 'active' &&
+    typeof data.driverId === 'string' && data.driverId.length > 0 &&
+    typeof data.vehicleId === 'string' && data.vehicleId.trim().length > 0 &&
+    latestActivity !== null &&
+    Date.now() - latestActivity.getTime() <= maxAgeMs;
 }
 
 // Aggregate crowd sentiment
@@ -159,14 +198,13 @@ async function aggregateCrowdSentiment(tripId) {
 
     reports.forEach(doc => {
       const data = doc.data();
-      const user = data.userId;
 
       if (data.crowdLevel === 'available') levels.available++;
       if (data.crowdLevel === 'standing') levels.standing++;
       if (data.crowdLevel === 'full') levels.full++;
 
       // Check if conductor (conductor reports have higher weight)
-      if (user.role === 'conductor' && !lastConductorReport) {
+      if (data.userRole === 'conductor' && !lastConductorReport) {
         lastConductorReport = data.crowdLevel;
       }
     });
@@ -421,12 +459,25 @@ app.get('/api/routes/:routeId/active-trips', async (req, res) => {
       .where('status', '==', 'active')
       .get();
 
-    const tripsList = trips.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
+    const tripsList = trips.docs
+      .filter((doc) => isTripLive(doc.data()))
+      .map((doc) => serializeTrip(doc.id, doc.data()));
 
     res.json({ success: true, trips: tripsList });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/trips/active', async (req, res) => {
+  try {
+    const snapshot = await db.collection('liveTrips').where('status', '==', 'active').get();
+    const liveDocs = snapshot.docs.filter((doc) => isTripLive(doc.data()));
+    const routeIds = [...new Set(liveDocs.map((doc) => doc.data().routeId).filter(Boolean))];
+    const routeDocs = await Promise.all(routeIds.map((id) => db.collection('routes').doc(id).get()));
+    const routes = new Map(routeDocs.filter((doc) => doc.exists).map((doc) => [doc.id, doc.data()]));
+    const trips = liveDocs.map((doc) => serializeTrip(doc.id, doc.data(), routes.get(doc.data().routeId)));
+    res.json({ success: true, trips, count: trips.length });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
@@ -455,10 +506,12 @@ app.post('/api/routes/find-buses', async (req, res) => {
       .where('status', '==', 'active')
       .get();
 
-    const activeTrips = activeTripsSnapshot.docs.map((doc) => ({
+    const activeTrips = activeTripsSnapshot.docs
+      .filter((doc) => isTripLive(doc.data()))
+      .map((doc) => ({
       id: doc.id,
       ...doc.data(),
-    }));
+      }));
 
     if (activeTrips.length === 0) {
       return res.json({ success: true, matches: [], count: 0 });
@@ -506,8 +559,12 @@ app.post('/api/routes/find-buses', async (req, res) => {
 
 app.post('/api/trips/initialize', verifyToken, async (req, res) => {
   try {
-    const { vehicleId, routeId, conductorId } = req.body;
+    const { vehicleId, routeId, conductorId, capacity, direction } = req.body;
     const driverId = req.user.uid;
+
+    if (typeof vehicleId !== 'string' || vehicleId.trim().length < 2 || typeof routeId !== 'string') {
+      return res.status(400).json({ success: false, error: 'A route and valid vehicle ID are required' });
+    }
 
     // Verify driver role
     const driver = await db.collection('users').doc(driverId).get();
@@ -527,18 +584,32 @@ app.post('/api/trips/initialize', verifyToken, async (req, res) => {
       });
     }
 
+    const existingTrip = await db.collection('liveTrips')
+      .where('driverId', '==', driverId)
+      .get();
+    const activeTrip = existingTrip.docs.find((doc) => doc.data().status === 'active');
+    if (activeTrip) {
+      return res.status(409).json({
+        success: false,
+        error: 'You already have an active trip. End it before starting another.',
+        tripId: activeTrip.id,
+      });
+    }
+
     // Create active trip
     const tripRef = await db.collection('liveTrips').add({
       driverId,
-      vehicleId,
+      vehicleId: vehicleId.trim(),
       routeId,
+      direction: direction === 'inbound' ? 'inbound' : 'outbound',
       conductorId: conductorId || null,
       status: 'active',
       startTime: admin.firestore.FieldValue.serverTimestamp(),
       endTime: null,
       currentLocation: null,
-      currentSpeed: 0,
+      currentSpeedKmh: 0,
       occupancy: 0,
+      capacity: Math.min(100, Math.max(1, Number(capacity) || 55)),
       crowdLevel: 'available',
       emergencyAlertActive: false,
       eta: null,
@@ -555,6 +626,10 @@ app.post('/api/trips/initialize', verifyToken, async (req, res) => {
       tripId,
       routeId,
       driverId,
+      vehicleId,
+      occupancy: 0,
+      capacity: Math.min(100, Math.max(1, Number(capacity) || 55)),
+      route: { id: routeId, ...normalizeRoute(route.data()) },
       timestamp: new Date()
     });
 
@@ -576,30 +651,44 @@ app.post('/api/trips/initialize', verifyToken, async (req, res) => {
 app.post('/api/trips/:tripId/gps', verifyToken, async (req, res) => {
   try {
     const { tripId } = req.params;
-    const { latitude, longitude, speed, accuracy } = req.body;
+    const { latitude, longitude, speedMps, speed, accuracy } = req.body;
+    const lat = Number(latitude);
+    const lng = Number(longitude);
 
-    if (!latitude || !longitude) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       return res.status(400).json({ 
         success: false, 
         error: 'GPS coordinates required' 
       });
     }
 
+    const tripRef = db.collection('liveTrips').doc(tripId);
+    const tripSnapshot = await tripRef.get();
+    if (!tripSnapshot.exists || tripSnapshot.data().status !== 'active') {
+      return res.status(404).json({ success: false, error: 'Active trip not found' });
+    }
+    const tripData = tripSnapshot.data();
+    if (tripData.driverId !== req.user.uid && tripData.conductorId !== req.user.uid) {
+      return res.status(403).json({ success: false, error: 'Not authorized to update this trip' });
+    }
+    const measuredSpeedMps = Math.max(0, Number(speedMps ?? speed) || 0);
+    const currentSpeedKmh = Math.min(120, measuredSpeedMps * 3.6);
+
     // Update trip with GPS data
-    await db.collection('liveTrips').doc(tripId).update({
-      currentLocation: new admin.firestore.GeoPoint(latitude, longitude),
-      currentSpeed: speed || 0,
+    await tripRef.update({
+      currentLocation: new admin.firestore.GeoPoint(lat, lng),
+      currentSpeedKmh,
       lastUpdated: admin.firestore.FieldValue.serverTimestamp()
     });
 
     // Calculate ETA
-    const eta = await calculateETA(tripId, latitude, longitude);
+    const eta = await calculateETA(tripId, lat, lng);
 
     // Store GPS history (optional - for analytics)
     await db.collection('gpsHistory').add({
       tripId,
-      location: new admin.firestore.GeoPoint(latitude, longitude),
-      speed: speed || 0,
+      location: new admin.firestore.GeoPoint(lat, lng),
+      speedKmh: currentSpeedKmh,
       accuracy: accuracy || null,
       timestamp: admin.firestore.FieldValue.serverTimestamp()
     });
@@ -607,8 +696,8 @@ app.post('/api/trips/:tripId/gps', verifyToken, async (req, res) => {
     // Emit real-time GPS update to all connected clients
     io.emit('gps-update', {
       tripId,
-      location: { latitude, longitude },
-      speed: speed || 0,
+      location: { latitude: lat, longitude: lng },
+      speedKmh: currentSpeedKmh,
       eta: eta,
       timestamp: new Date()
     });
@@ -622,6 +711,49 @@ app.post('/api/trips/:tripId/gps', verifyToken, async (req, res) => {
   } catch (error) {
     console.error('GPS update error:', error);
     res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+app.patch('/api/trips/:tripId/occupancy', verifyToken, async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const tripRef = db.collection('liveTrips').doc(tripId);
+    const snapshot = await tripRef.get();
+    if (!snapshot.exists || snapshot.data().status !== 'active') {
+      return res.status(404).json({ success: false, error: 'Active trip not found' });
+    }
+    const trip = snapshot.data();
+    if (trip.driverId !== req.user.uid && trip.conductorId !== req.user.uid) {
+      return res.status(403).json({ success: false, error: 'Not authorized to update this trip' });
+    }
+    const capacity = Math.min(100, Math.max(1, Number(trip.capacity) || 55));
+    const occupancy = Math.min(capacity, Math.max(0, Math.round(Number(req.body.occupancy) || 0)));
+    const ratio = occupancy / capacity;
+    const crowdLevel = ratio >= 0.9 ? 'full' : ratio >= 0.6 ? 'standing' : 'available';
+    await tripRef.update({ occupancy, capacity, crowdLevel, lastUpdated: admin.firestore.FieldValue.serverTimestamp() });
+    const update = { tripId, occupancy, capacity, crowdLevel, timestamp: new Date() };
+    io.emit('crowd-update', update);
+    res.json({ success: true, ...update });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/trips/my-active', verifyToken, async (req, res) => {
+  try {
+    const snapshot = await db.collection('liveTrips')
+      .where('driverId', '==', req.user.uid)
+      .get();
+    const activeDoc = snapshot.docs.find((doc) => doc.data().status === 'active');
+    if (!activeDoc) return res.json({ success: true, trip: null });
+    const data = activeDoc.data();
+    const routeDoc = await db.collection('routes').doc(data.routeId).get();
+    return res.json({
+      success: true,
+      trip: serializeTrip(activeDoc.id, data, routeDoc.exists ? routeDoc.data() : null),
+    });
+  } catch (error) {
+    return res.status(400).json({ success: false, error: error.message });
   }
 });
 
@@ -647,7 +779,7 @@ app.get('/api/trips/:tripId', async (req, res) => {
           latitude: tripData.currentLocation.latitude,
           longitude: tripData.currentLocation.longitude
         } : null,
-        route: route.data(),
+        route: normalizeRoute(route.data()),
         driver: driver.data()
       }
     });
@@ -717,7 +849,88 @@ app.post('/api/trips/:tripId/end', verifyToken, async (req, res) => {
 });
 
 // ============================================
-// 4. TRIP CANCELLATION ENDPOINT (ADMIN ONLY)
+// 4. FREE DIGITAL TICKETS
+// ============================================
+
+app.get('/api/tickets/mine', verifyToken, async (req, res) => {
+  try {
+    const snapshot = await db.collection('tickets').where('passengerId', '==', req.user.uid).get();
+    const tickets = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate?.().toISOString?.() || null,
+    })).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    res.json({ success: true, tickets });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/tickets', verifyToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'passenger') {
+      return res.status(403).json({ success: false, error: 'Only passengers can get tickets' });
+    }
+    const { tripId, pickupStopIndex, dropoffStopIndex, passengerCount } = req.body;
+    const count = Math.min(4, Math.max(1, Math.round(Number(passengerCount) || 1)));
+    const tripDoc = await db.collection('liveTrips').doc(String(tripId || '')).get();
+    if (!tripDoc.exists || !isTripLive(tripDoc.data())) {
+      return res.status(404).json({ success: false, error: 'This vehicle is no longer active' });
+    }
+    const trip = tripDoc.data();
+    const routeDoc = await db.collection('routes').doc(trip.routeId).get();
+    if (!routeDoc.exists) return res.status(404).json({ success: false, error: 'Route not found' });
+    const route = normalizeRoute(routeDoc.data());
+    const stops = trip.direction === 'inbound' ? [...(route.stops || [])].reverse() : route.stops || [];
+    const pickup = Number(pickupStopIndex);
+    const dropoff = Number(dropoffStopIndex);
+    if (!Number.isInteger(pickup) || !Number.isInteger(dropoff) || pickup < 0 || dropoff <= pickup || dropoff >= stops.length) {
+      return res.status(400).json({ success: false, error: 'Choose a pickup stop before the drop-off stop' });
+    }
+    const capacity = Number(trip.capacity) || 55;
+    if ((Number(trip.reservedSeats) || 0) + count > capacity) {
+      return res.status(409).json({ success: false, error: 'Not enough space on this vehicle' });
+    }
+    const ticketCode = `TL-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const ticketData = {
+      ticketCode,
+      passengerId: req.user.uid,
+      tripId: tripDoc.id,
+      routeId: trip.routeId,
+      routeNumber: route.routeNumber || trip.routeId,
+      vehicleId: trip.vehicleId,
+      pickupStop: stops[pickup]?.name || `Stop ${pickup + 1}`,
+      dropoffStop: stops[dropoff]?.name || `Stop ${dropoff + 1}`,
+      pickupStopIndex: pickup,
+      dropoffStopIndex: dropoff,
+      passengerCount: count,
+      fare: route.fare || 'Pay on bus',
+      status: 'confirmed',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    const ticketRef = db.collection('tickets').doc();
+    await db.runTransaction(async (transaction) => {
+      const freshTripDoc = await transaction.get(tripDoc.ref);
+      const freshTrip = freshTripDoc.data();
+      if (!freshTrip || !isTripLive(freshTrip)) throw new Error('This vehicle is no longer active');
+      const reservedSeats = Number(freshTrip.reservedSeats) || 0;
+      if (reservedSeats + count > (Number(freshTrip.capacity) || 55)) {
+        throw new Error('Not enough space on this vehicle');
+      }
+      transaction.update(tripDoc.ref, { reservedSeats: reservedSeats + count });
+      transaction.set(ticketRef, ticketData);
+    });
+    res.status(201).json({
+      success: true,
+      ticket: { id: ticketRef.id, ...ticketData, createdAt: new Date().toISOString() },
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================
+// 5. TRIP CANCELLATION ENDPOINT (ADMIN ONLY)
 // ============================================
 
 app.post('/api/trips/:tripId/cancel', verifyToken, async (req, res) => {
@@ -874,6 +1087,8 @@ app.post('/api/reports/crowd', verifyToken, async (req, res) => {
     io.emit('crowd-update', {
       tripId,
       crowdLevel: aggregatedSentiment,
+      occupancy: tripData.occupancy || 0,
+      capacity: tripData.capacity || 55,
       reportedBy: userData.role,
       timestamp: new Date()
     });
@@ -932,6 +1147,12 @@ app.post('/api/alerts/emergency', verifyToken, async (req, res) => {
     }
 
     const tripData = trip.data();
+    if (tripData.status !== 'active') {
+      return res.status(400).json({ success: false, error: 'Trip is not active' });
+    }
+    if (tripData.driverId !== userId && tripData.conductorId !== userId) {
+      return res.status(403).json({ success: false, error: 'Only assigned trip staff can broadcast alerts' });
+    }
 
     // Get route info
     const route = await db.collection('routes').doc(tripData.routeId).get();
@@ -942,6 +1163,10 @@ app.post('/api/alerts/emergency', verifyToken, async (req, res) => {
       userId,
       alertType,
       message,
+      routeId: tripData.routeId,
+      routeNumber: route.data()?.routeNumber || tripData.routeId,
+      routeName: route.data()?.name || `${route.data()?.startPoint || ''} - ${route.data()?.endPoint || ''}`,
+      vehicleId: tripData.vehicleId,
       location: location || tripData.currentLocation,
       status: 'active',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -962,6 +1187,8 @@ app.post('/api/alerts/emergency', verifyToken, async (req, res) => {
       tripId,
       routeId: tripData.routeId,
       routeName: route.data()?.name,
+      routeNumber: route.data()?.routeNumber || tripData.routeId,
+      vehicleId: tripData.vehicleId,
       alertType,
       message,
       location: location || tripData.currentLocation,
@@ -979,6 +1206,21 @@ app.post('/api/alerts/emergency', verifyToken, async (req, res) => {
 
   } catch (error) {
     console.error('Emergency alert error:', error);
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/alerts/active', async (req, res) => {
+  try {
+    const snapshot = await db.collection('emergencyAlerts').where('status', '==', 'active').get();
+    const alerts = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+      location: mapCurrentLocation(doc.data().location),
+      createdAt: doc.data().createdAt?.toDate?.().toISOString?.() || null,
+    }));
+    res.json({ success: true, alerts });
+  } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }
 });
@@ -1031,36 +1273,29 @@ app.post('/api/search/routes', async (req, res) => {
       });
     }
 
-    // Search routes that contain both stops
-    const routes = await db.collection('routes')
-      .where('stops', 'array-contains', startStop)
-      .get();
-
-    const matchingRoutes = [];
-    for (const doc of routes.docs) {
-      const routeData = doc.data();
-      if (routeData.stops.includes(endStop)) {
-        matchingRoutes.push({
-          id: doc.id,
-          ...routeData
-        });
-      }
-    }
+    const normalizeSearch = (value) => String(value).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const startQuery = normalizeSearch(startStop);
+    const endQuery = normalizeSearch(endStop);
+    const routes = await db.collection('routes').get();
+    const matchingRoutes = routes.docs.flatMap((doc) => {
+      const route = normalizeRoute(doc.data());
+      const stops = route.stops || [];
+      const startIndex = stops.findIndex((stop) => normalizeSearch(stop.name).includes(startQuery));
+      const endIndex = stops.findIndex((stop) => normalizeSearch(stop.name).includes(endQuery));
+      if (startIndex === -1 || endIndex === -1 || startIndex === endIndex) return [];
+      return [{ id: doc.id, ...route, direction: startIndex < endIndex ? 'outbound' : 'inbound' }];
+    });
 
     // Get active trips for matching routes
     const routeResults = await Promise.all(
       matchingRoutes.map(async (route) => {
-        const activeTrips = await db.collection('liveTrips')
-          .where('routeId', '==', route.id)
-          .where('status', '==', 'active')
-          .get();
+        const activeTrips = await db.collection('liveTrips').where('routeId', '==', route.id).get();
 
         return {
           route,
-          activeTrips: activeTrips.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }))
+          activeTrips: activeTrips.docs
+            .filter((doc) => isTripLive(doc.data()) && (doc.data().direction || 'outbound') === route.direction)
+            .map((doc) => serializeTrip(doc.id, doc.data(), route))
         };
       })
     );
@@ -1336,21 +1571,6 @@ io.on('connection', (socket) => {
   socket.on('subscribe-route', (routeId) => {
     socket.join(`route-${routeId}`);
     console.log(`🚌 Client subscribed to route: ${routeId}`);
-  });
-
-  // Listen for GPS updates and broadcast to subscribers
-  socket.on('send-gps', (data) => {
-    io.to(`trip-${data.tripId}`).emit('gps-update', data);
-  });
-
-  // Listen for crowd updates and broadcast
-  socket.on('send-crowd-update', (data) => {
-    io.to(`trip-${data.tripId}`).emit('crowd-update', data);
-  });
-
-  // Listen for ETA updates
-  socket.on('send-eta-update', (data) => {
-    io.to(`trip-${data.tripId}`).emit('eta-update', data);
   });
 
   // Disconnect handling

@@ -76,6 +76,43 @@ function mapCurrentLocation(currentLocation) {
   return null;
 }
 
+function distanceAlongStops(stops, fromIndex, toIndex) {
+  let distanceKm = 0;
+  for (let index = fromIndex; index < toIndex; index += 1) {
+    distanceKm += haversineDistance(
+      stops[index].lat,
+      stops[index].lng,
+      stops[index + 1].lat,
+      stops[index + 1].lng,
+    );
+  }
+  return distanceKm;
+}
+
+function estimatePickup(trip, stops, pickup) {
+  const location = mapCurrentLocation(trip.currentLocation);
+  if (!location) {
+    return { etaMinutes: null, distanceToPickupKm: null, locationStale: true };
+  }
+
+  const current = findNearestStopIndex(stops, location.latitude, location.longitude, Infinity);
+  if (!current || current.index > pickup.index) return null;
+
+  const firstLeg = haversineDistance(
+    location.latitude,
+    location.longitude,
+    stops[current.index].lat,
+    stops[current.index].lng,
+  );
+  const distanceKm = firstLeg + distanceAlongStops(stops, current.index, pickup.index);
+  const speedKmh = Math.min(80, Math.max(12, Number(trip.currentSpeedKmh) || 25));
+  return {
+    etaMinutes: Math.max(1, Math.ceil((distanceKm / speedKmh) * 60)),
+    distanceToPickupKm: Number(distanceKm.toFixed(2)),
+    locationStale: false,
+  };
+}
+
 function normalizeRoute(route) {
   const stops = normalizeStops(route.stops);
   return {
@@ -101,7 +138,8 @@ function findMatchingBuses({
     if (!storedRoute) continue;
     const route = normalizeRoute(storedRoute);
 
-    const stops = normalizeStops(route.stops);
+    const storedStops = normalizeStops(route.stops);
+    const stops = trip.direction === 'inbound' ? [...storedStops].reverse() : storedStops;
     if (stops.length < 2) continue;
 
     const pickup = findNearestStopIndex(stops, passengerLat, passengerLng, maxStopDistanceKm);
@@ -112,6 +150,8 @@ function findMatchingBuses({
     if (!destination) continue;
 
     const destinationIndex = pickup.index + 1 + destination.index;
+    const pickupEstimate = estimatePickup(trip, stops, pickup);
+    if (!pickupEstimate) continue;
 
     matches.push({
       tripId: trip.id,
@@ -121,6 +161,10 @@ function findMatchingBuses({
       currentLocation: mapCurrentLocation(trip.currentLocation),
       occupancy: typeof trip.occupancy === 'number' ? trip.occupancy : 0,
       crowdLevel: trip.crowdLevel || 'unknown',
+      capacity: typeof trip.capacity === 'number' ? trip.capacity : 55,
+      etaMinutes: pickupEstimate.etaMinutes,
+      distanceToPickupKm: pickupEstimate.distanceToPickupKm,
+      locationStale: pickupEstimate.locationStale,
       pickupDistanceKm: Number(pickup.distanceKm.toFixed(3)),
       destinationDistanceKm: Number(destination.distanceKm.toFixed(3)),
       pickupStop: {
@@ -135,8 +179,8 @@ function findMatchingBuses({
       route: {
         id: trip.routeId,
         routeNumber: route.routeNumber || trip.routeId,
-        from: route.from || 'Unknown',
-        to: route.to || 'Unknown',
+        from: (trip.direction === 'inbound' ? route.to : route.from) || 'Unknown',
+        to: (trip.direction === 'inbound' ? route.from : route.to) || 'Unknown',
         stops,
         fare: route.fare || null,
         frequency: route.frequency || null,
@@ -148,6 +192,8 @@ function findMatchingBuses({
         currentLocation: mapCurrentLocation(trip.currentLocation),
         occupancy: typeof trip.occupancy === 'number' ? trip.occupancy : 0,
         crowdLevel: trip.crowdLevel || 'unknown',
+        capacity: typeof trip.capacity === 'number' ? trip.capacity : 55,
+        etaMinutes: pickupEstimate.etaMinutes,
       },
     });
   }
@@ -158,4 +204,5 @@ function findMatchingBuses({
 module.exports = {
   findMatchingBuses,
   normalizeRoute,
+  mapCurrentLocation,
 };

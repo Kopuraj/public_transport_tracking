@@ -9,18 +9,31 @@ class SocketService {
   SocketService._internal();
 
   IO.Socket? _socket;
-  
+
   // Controllers to expose streams of data
-  final StreamController<Map<String, dynamic>> _gpsUpdateController = StreamController<Map<String, dynamic>>.broadcast();
-  final StreamController<Map<String, dynamic>> _crowdUpdateController = StreamController<Map<String, dynamic>>.broadcast();
-  final StreamController<Map<String, dynamic>> _tripStartedController = StreamController<Map<String, dynamic>>.broadcast();
-  final StreamController<Map<String, dynamic>> _tripEndedController = StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _gpsUpdateController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _crowdUpdateController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _tripStartedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _tripEndedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _emergencyAlertController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _alertResolvedController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   // Streams for UI consumption
   Stream<Map<String, dynamic>> get gpsUpdates => _gpsUpdateController.stream;
-  Stream<Map<String, dynamic>> get crowdUpdates => _crowdUpdateController.stream;
+  Stream<Map<String, dynamic>> get crowdUpdates =>
+      _crowdUpdateController.stream;
   Stream<Map<String, dynamic>> get tripStarted => _tripStartedController.stream;
   Stream<Map<String, dynamic>> get tripEnded => _tripEndedController.stream;
+  Stream<Map<String, dynamic>> get emergencyAlerts =>
+      _emergencyAlertController.stream;
+  Stream<Map<String, dynamic>> get alertResolved =>
+      _alertResolvedController.stream;
 
   bool get isConnected => _socket?.connected ?? false;
 
@@ -28,13 +41,16 @@ class SocketService {
     if (_socket != null && _socket!.connected) return;
 
     debugPrint('🔌 Connecting to WebSocket at ${ApiConfig.wsUrl}');
-    
-    _socket = IO.io(ApiConfig.wsUrl, IO.OptionBuilder()
-      .setTransports(['websocket']) // Use WebSocket only
-      .setReconnectionAttempts(5)
-      .setReconnectionDelay(2000)
-      .enableAutoConnect()
-      .build());
+
+    _socket = IO.io(
+      ApiConfig.wsUrl,
+      IO.OptionBuilder()
+          .setTransports(['websocket']) // Use WebSocket only
+          .setReconnectionAttempts(5)
+          .setReconnectionDelay(2000)
+          .enableAutoConnect()
+          .build(),
+    );
 
     _socket!.onConnect((_) {
       debugPrint('✅ Connected to WebSocket');
@@ -68,6 +84,14 @@ class SocketService {
       debugPrint('🛑 Trip ended: $data');
       _tripEndedController.add(Map<String, dynamic>.from(data));
     });
+
+    _socket!.on('emergency-alert', (data) {
+      _emergencyAlertController.add(Map<String, dynamic>.from(data));
+    });
+
+    _socket!.on('alert-resolved', (data) {
+      _alertResolvedController.add(Map<String, dynamic>.from(data));
+    });
   }
 
   void emit(String event, dynamic data) {
@@ -84,6 +108,8 @@ class SocketService {
     _crowdUpdateController.close();
     _tripStartedController.close();
     _tripEndedController.close();
+    _emergencyAlertController.close();
+    _alertResolvedController.close();
     disconnect();
   }
 }

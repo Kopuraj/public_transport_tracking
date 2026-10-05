@@ -13,12 +13,12 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> {
   final MapService _mapService = MapService();
   late MapController _mapController;
-  
+
   LatLng _currentCenter = MapService.defaultCenter;
   LatLng? _userLocation;
   List<Marker> _markers = [];
   final List<Polyline> _polylines = [];
-  
+
   bool _isLoading = true;
 
   @override
@@ -31,21 +31,21 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _initializeLocation() async {
     // Get user's current location
     LatLng? userLocation = await _mapService.getCurrentLocation();
-    
+
     if (userLocation != null) {
       setState(() {
         _userLocation = userLocation;
         _currentCenter = userLocation;
         _markers = [_mapService.createUserMarker(userLocation)];
       });
-      
+
       // Move map to user location
       _mapController.move(userLocation, 15.0);
     }
-    
+
     // Add some sample bus stops and buses
     _addSampleData();
-    
+
     setState(() {
       _isLoading = false;
     });
@@ -54,29 +54,28 @@ class _MapScreenState extends State<MapScreen> {
   void _addSampleData() {
     // Sample bus stops around user location or default center
     LatLng center = _userLocation ?? _currentCenter;
-    
+
     List<LatLng> busStops = [
       LatLng(center.latitude + 0.01, center.longitude + 0.01),
       LatLng(center.latitude - 0.01, center.longitude + 0.005),
       LatLng(center.latitude + 0.005, center.longitude - 0.01),
     ];
-    
+
     // Add bus stop markers
     for (LatLng stop in busStops) {
       _markers.add(_mapService.createBusStopMarker(stop));
     }
-    
+
     // Sample bus location
-    LatLng busLocation = LatLng(center.latitude + 0.005, center.longitude + 0.007);
+    LatLng busLocation = LatLng(
+      center.latitude + 0.005,
+      center.longitude + 0.007,
+    );
     _markers.add(_mapService.createBusMarker(busLocation, busNumber: "45A"));
-    
+
     // Sample route polyline
-    List<LatLng> routePoints = [
-      center,
-      ...busStops,
-      busLocation,
-    ];
-    
+    List<LatLng> routePoints = [center, ...busStops, busLocation];
+
     _polylines.add(_mapService.createRoutePolyline(routePoints));
   }
 
@@ -94,19 +93,17 @@ class _MapScreenState extends State<MapScreen> {
               shape: BoxShape.circle,
               border: Border.all(color: Colors.white, width: 2),
             ),
-            child: Icon(
-              Icons.place,
-              color: Colors.white,
-              size: 16,
-            ),
+            child: Icon(Icons.place, color: Colors.white, size: 16),
           ),
         ),
       );
     });
-    
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Added marker at ${point.latitude.toStringAsFixed(4)}, ${point.longitude.toStringAsFixed(4)}'),
+        content: Text(
+          'Added marker at ${point.latitude.toStringAsFixed(4)}, ${point.longitude.toStringAsFixed(4)}',
+        ),
         duration: Duration(seconds: 2),
       ),
     );
@@ -154,10 +151,10 @@ class _MapScreenState extends State<MapScreen> {
                     markers: _markers,
                     polylines: _polylines,
                     onTap: _onMapTap,
-                    tileProvider: 'cartodb', // Better for web browsers
+                    tileProvider: 'openstreetmap',
                   ),
                 ),
-                
+
                 // Map controls overlay
                 Positioned(
                   bottom: 16,
@@ -178,9 +175,17 @@ class _MapScreenState extends State<MapScreen> {
                             children: [
                               Icon(Icons.person, color: Colors.green, size: 16),
                               Text(' Your Location  '),
-                              Icon(Icons.directions_bus, color: Colors.blue, size: 16),
+                              Icon(
+                                Icons.directions_bus,
+                                color: Colors.blue,
+                                size: 16,
+                              ),
                               Text(' Bus  '),
-                              Icon(Icons.location_on, color: Colors.red, size: 16),
+                              Icon(
+                                Icons.location_on,
+                                color: Colors.red,
+                                size: 16,
+                              ),
                               Text(' Bus Stop'),
                             ],
                           ),
